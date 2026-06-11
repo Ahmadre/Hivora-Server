@@ -4,6 +4,7 @@ spring:
   data:
     mongodb:
       uri: ${HIVORA_MONGODB_URI:mongodb://localhost:27017/hivora}
+      database: ${HIVORA_MONGODB_NAME:hivora}
       auto-index-creation: true
   mail:
     host: ${HIVORA_SMTP_HOST:localhost}
