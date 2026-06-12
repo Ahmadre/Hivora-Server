@@ -25,7 +25,8 @@ public class MetaController {
 	private String serverVersion;
 
 	public record Meta(String serverVersion, String minAppVersion, String organizationName,
-			boolean setupCompleted, String privacyPolicyUrl, Map<String, Boolean> featureFlags) {
+			String logoUrl, boolean setupCompleted, String privacyPolicyUrl,
+			Map<String, Boolean> featureFlags) {
 	}
 
 	@Operation(summary = "Server metadata", description = "Returns server version, minimum required app version, feature flags and branding. Called by the app on every start.")
@@ -37,6 +38,7 @@ public class MetaController {
 				serverVersion,
 				properties.getApp().getMinVersion(),
 				current.getOrganizationName(),
+				current.getGeneral().getLogoUrl(),
 				current.isSetupCompleted(),
 				properties.getApp().getPrivacyPolicyUrl(),
 				properties.getApp().getFeatureFlags());
