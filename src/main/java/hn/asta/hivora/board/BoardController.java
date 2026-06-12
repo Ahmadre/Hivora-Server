@@ -48,8 +48,11 @@ public class BoardController {
 	}
 
 	@GetMapping
-	public List<AgileBoard> list() {
+	public List<AgileBoard> list(@RequestParam(required = false) String projectId) {
 		currentUser.require();
+		if (projectId != null) {
+			return boards.findByProjectIdsContains(projectId);
+		}
 		return boards.findAll();
 	}
 
