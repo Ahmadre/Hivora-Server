@@ -60,6 +60,8 @@ public class SearchService {
 	private static final int CAP_SCOPED = 24;
 	/** Over-fetch factor before ranking/dedupe so the cap survives merging. */
 	private static final int CANDIDATE_FACTOR = 3;
+	/** How many recent entities to suggest for an empty scoped query. */
+	private static final int SUGGEST_LIMIT = 10;
 
 	private static final String F_TITLE = "title";
 	private static final String F_NAME = "name";
@@ -76,30 +78,63 @@ public class SearchService {
 		SearchCategory only = SearchCategory.parse(scope);
 		int cap = only == null ? CAP_ALL : CAP_SCOPED;
 
-		List<SearchGroup> groups = new ArrayList<>();
+		// Empty query + a specific entity scope → suggest the latest entities.
+		// Empty + "all" (or Commands) → no groups (the client shows recents).
+		final List<SearchGroup> groups;
 		if (!q.isBlank()) {
-			for (SearchCategory cat : SearchCategory.values()) {
-				if (only != null && cat != only) continue;
-				List<SearchHit> hits = switch (cat) {
-					case ISSUES -> searchIssues(q, cap);
-					case PROJECTS -> searchProjects(q, cap);
-					case PEOPLE -> searchPeople(q, cap);
-					case BOARDS -> searchBoards(q, cap);
-					case DOCS -> searchDocs(q, cap);
-				};
-				if (!hits.isEmpty()) groups.add(new SearchGroup(cat.name(), hits));
-			}
+			groups = queryGroups(q, only, cap);
+		} else if (only != null) {
+			groups = groupOf(only, suggest(only));
+		} else {
+			groups = List.of();
 		}
 		return new SearchResponse(groups, counts());
 	}
 
+	private List<SearchGroup> queryGroups(String q, SearchCategory only, int cap) {
+		List<SearchGroup> groups = new ArrayList<>();
+		for (SearchCategory cat : SearchCategory.values()) {
+			if (only != null && cat != only) continue;
+			List<SearchHit> hits = switch (cat) {
+				case ISSUES -> mapIssues(searchIssues(q, cap));
+				case PROJECTS -> mapProjects(searchProjects(q, cap));
+				case PEOPLE -> mapPeople(searchPeople(q, cap));
+				case BOARDS -> searchBoards(q, cap);
+				case DOCS -> mapDocs(searchDocs(q, cap));
+			};
+			if (!hits.isEmpty()) groups.add(new SearchGroup(cat.name(), hits));
+		}
+		return groups;
+	}
+
+	private static List<SearchGroup> groupOf(SearchCategory cat, List<SearchHit> hits) {
+		return hits.isEmpty() ? List.of() : List.of(new SearchGroup(cat.name(), hits));
+	}
+
+	/** Latest entities of [cat] (most-recent first) for the empty-query state. */
+	private List<SearchHit> suggest(SearchCategory cat) {
+		return switch (cat) {
+			case ISSUES -> mapIssues(
+					latest(Issue.class, SUGGEST_LIMIT, F_UPDATED, null));
+			case PROJECTS -> mapProjects(
+					latest(Project.class, SUGGEST_LIMIT, F_UPDATED, archivedFalse()));
+			case PEOPLE -> mapPeople(
+					latest(User.class, SUGGEST_LIMIT, F_UPDATED, Criteria.where("active").is(true)));
+			case BOARDS -> suggestBoards();
+			case DOCS -> mapDocs(
+					latest(Article.class, SUGGEST_LIMIT, F_UPDATED, null));
+		};
+	}
+
 	// ─────────────────────────── per-category ─────────────────────────────
 
-	private List<SearchHit> searchIssues(String q, int cap) {
-		List<Issue> hits = hybrid(Issue.class, q, cap,
+	private List<Issue> searchIssues(String q, int cap) {
+		return hybrid(Issue.class, q, cap,
 				List.of(contains(F_TITLE, q), prefix("readableId", q), contains(F_TAGS, q)),
 				F_UPDATED, Issue::getId, Issue::getTitle);
+	}
 
+	private List<SearchHit> mapIssues(List<Issue> hits) {
 		Map<String, User> byId = userMap(hits.stream()
 				.map(Issue::getAssigneeId).filter(Objects::nonNull).collect(Collectors.toSet()));
 
@@ -119,11 +154,13 @@ public class SearchService {
 		}).toList();
 	}
 
-	private List<SearchHit> searchProjects(String q, int cap) {
-		List<Project> hits = hybrid(Project.class, q, cap,
+	private List<Project> searchProjects(String q, int cap) {
+		return hybrid(Project.class, q, cap,
 				List.of(contains(F_NAME, q), prefix("key", q)),
 				F_UPDATED, Project::getId, Project::getName);
+	}
 
+	private List<SearchHit> mapProjects(List<Project> hits) {
 		Map<String, User> byId = userMap(hits.stream()
 				.flatMap(p -> p.getMemberIds().stream()).collect(Collectors.toSet()));
 
@@ -149,11 +186,13 @@ public class SearchService {
 		}).toList();
 	}
 
-	private List<SearchHit> searchPeople(String q, int cap) {
-		List<User> hits = hybrid(User.class, q, cap,
+	private List<User> searchPeople(String q, int cap) {
+		return hybrid(User.class, q, cap,
 				List.of(contains("displayName", q), contains("username", q), contains(F_TITLE, q)),
 				null, User::getId, User::getDisplayName);
+	}
 
+	private List<SearchHit> mapPeople(List<User> hits) {
 		return hits.stream()
 				.filter(User::isActive)
 				.map(u -> SearchHit.builder()
@@ -172,34 +211,52 @@ public class SearchService {
 				List.of(contains(F_NAME, q)), null, AgileBoard::getId, AgileBoard::getName);
 		List<Sprint> sprints = hybrid(Sprint.class, q, cap,
 				List.of(contains(F_NAME, q), contains("goal", q)), null, Sprint::getId, Sprint::getName);
+		return combineBoards(boards, sprints, cap);
+	}
 
+	private List<SearchHit> suggestBoards() {
+		List<AgileBoard> boards = latest(AgileBoard.class, SUGGEST_LIMIT, "createdAt", null);
+		int remaining = SUGGEST_LIMIT - boards.size();
+		List<Sprint> sprints = remaining > 0
+				? latest(Sprint.class, remaining, "createdAt", null)
+				: List.of();
+		return combineBoards(boards, sprints, SUGGEST_LIMIT);
+	}
+
+	private List<SearchHit> combineBoards(List<AgileBoard> boards, List<Sprint> sprints, int cap) {
 		List<SearchHit> out = new ArrayList<>();
-		for (AgileBoard b : boards) {
-			out.add(SearchHit.builder()
-					.category(SearchCategory.BOARDS.name())
-					.id(b.getId())
-					.route("/board")
-					.title(b.getName())
-					.subtitle("Agile board")
-					.build());
-		}
-		for (Sprint s : sprints) {
-			out.add(SearchHit.builder()
-					.category(SearchCategory.BOARDS.name())
-					.id(s.getId())
-					.route("/board")
-					.title(s.getName())
-					.subtitle(s.getGoal() != null && !s.getGoal().isBlank() ? s.getGoal() : "Sprint")
-					.build());
-		}
+		boards.forEach(b -> out.add(mapBoard(b)));
+		sprints.forEach(s -> out.add(mapSprint(s)));
 		return out.size() > cap ? out.subList(0, cap) : out;
 	}
 
-	private List<SearchHit> searchDocs(String q, int cap) {
-		List<Article> hits = hybrid(Article.class, q, cap,
+	private SearchHit mapBoard(AgileBoard b) {
+		return SearchHit.builder()
+				.category(SearchCategory.BOARDS.name())
+				.id(b.getId())
+				.route("/board")
+				.title(b.getName())
+				.subtitle("Agile board")
+				.build();
+	}
+
+	private SearchHit mapSprint(Sprint s) {
+		return SearchHit.builder()
+				.category(SearchCategory.BOARDS.name())
+				.id(s.getId())
+				.route("/board")
+				.title(s.getName())
+				.subtitle(s.getGoal() != null && !s.getGoal().isBlank() ? s.getGoal() : "Sprint")
+				.build();
+	}
+
+	private List<Article> searchDocs(String q, int cap) {
+		return hybrid(Article.class, q, cap,
 				List.of(contains(F_TITLE, q), contains(F_TAGS, q)),
 				F_UPDATED, Article::getId, Article::getTitle);
+	}
 
+	private List<SearchHit> mapDocs(List<Article> hits) {
 		Map<String, Project> byId = projectMap(hits.stream()
 				.map(Article::getProjectId).filter(Objects::nonNull).collect(Collectors.toSet()));
 
@@ -277,6 +334,17 @@ public class SearchService {
 	/** Case-insensitive anchored prefix — index-friendly for ids/keys. */
 	private static Criteria prefix(String field, String q) {
 		return Criteria.where(field).regex("^" + Pattern.quote(q), "i");
+	}
+
+	private static Criteria archivedFalse() {
+		return Criteria.where("archived").is(false);
+	}
+
+	/** The most-recent [limit] entities by [sortField] (optional [filter]). */
+	private <T> List<T> latest(Class<T> type, int limit, String sortField, Criteria filter) {
+		Query query = filter != null ? new Query(filter) : new Query();
+		query.with(Sort.by(Sort.Direction.DESC, sortField)).limit(limit);
+		return mongo.find(query, type);
 	}
 
 	private Map<String, User> userMap(Collection<String> ids) {
