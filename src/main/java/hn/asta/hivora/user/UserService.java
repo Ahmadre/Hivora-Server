@@ -2,12 +2,18 @@ package hn.asta.hivora.user;
 
 import hn.asta.hivora.common.ApiException;
 import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
+import org.springframework.data.mongodb.core.MongoTemplate;
+import org.springframework.data.mongodb.core.query.Criteria;
+import org.springframework.data.mongodb.core.query.Query;
+import org.springframework.data.mongodb.core.query.Update;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
 
 import java.util.Locale;
 import java.util.Set;
 
+@Slf4j
 @Service
 @RequiredArgsConstructor
 public class UserService {
@@ -16,9 +22,27 @@ public class UserService {
 
 	private final UserRepository users;
 	private final PasswordEncoder passwordEncoder;
+	private final MongoTemplate mongo;
 
 	public User get(String id) {
 		return users.findById(id).orElseThrow(() -> ApiException.notFound("User"));
+	}
+
+	/**
+	 * Permanently removes a user and scrubs the references that would otherwise
+	 * dangle: their in-app notifications are dropped, issues assigned to them are
+	 * unassigned, and they are removed from every watcher list. Historical author
+	 * references (reporter, comment authors) are intentionally retained.
+	 */
+	public void delete(User user) {
+		String id = user.getId();
+		mongo.remove(new Query(Criteria.where("userId").is(id)), "notifications");
+		mongo.updateMulti(new Query(Criteria.where("assigneeId").is(id)),
+				new Update().unset("assigneeId"), "issues");
+		mongo.updateMulti(new Query(Criteria.where("watcherIds").is(id)),
+				new Update().pull("watcherIds", id), "issues");
+		users.delete(user);
+		log.info("Deleted user {} ({}) and scrubbed dangling references", id, user.getUsername());
 	}
 
 	public User createLocal(String email, String username, String displayName, String rawPassword,

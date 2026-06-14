@@ -9,6 +9,10 @@ import org.springframework.mail.javamail.MimeMessageHelper;
 import org.springframework.scheduling.annotation.Async;
 import org.springframework.stereotype.Service;
 import org.springframework.web.util.HtmlUtils;
+import org.thymeleaf.context.Context;
+import org.thymeleaf.spring6.SpringTemplateEngine;
+
+import java.util.Map;
 
 /** Sends transactional HTML mails via the configured SMTP server (Mailpit in dev). */
 @Slf4j
@@ -17,12 +21,33 @@ import org.springframework.web.util.HtmlUtils;
 public class MailService {
 
 	private final ObjectProvider<JavaMailSender> mailSender;
+	private final ObjectProvider<SpringTemplateEngine> templateEngine;
 
 	@Value("${hivora.mail.from:hivora@localhost}")
 	private String from;
 
 	@Async
 	public void send(String to, String subject, String headline, String body, String link) {
+		dispatch(to, subject, html(headline, body, link));
+	}
+
+	/**
+	 * Renders a Thymeleaf template from {@code resources/templates/} and mails it.
+	 * Used for account-lifecycle mails (see {@code templates/email/account-*.html}).
+	 */
+	@Async
+	public void sendTemplate(String to, String subject, String template, Map<String, Object> model) {
+		SpringTemplateEngine engine = templateEngine.getIfAvailable();
+		if (engine == null) {
+			log.debug("No template engine available; skipping templated mail to {}", to);
+			return;
+		}
+		Context context = new Context();
+		context.setVariables(model);
+		dispatch(to, subject, engine.process(template, context));
+	}
+
+	private void dispatch(String to, String subject, String html) {
 		JavaMailSender sender = mailSender.getIfAvailable();
 		if (sender == null) {
 			log.debug("No SMTP server configured; skipping mail to {}", to);
@@ -34,7 +59,7 @@ public class MailService {
 			helper.setFrom(from);
 			helper.setTo(to);
 			helper.setSubject(subject);
-			helper.setText(html(headline, body, link), true);
+			helper.setText(html, true);
 			sender.send(message);
 		}
 		catch (Exception ex) {

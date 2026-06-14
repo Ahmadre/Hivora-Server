@@ -14,7 +14,10 @@ import java.time.Instant;
 @Document("notifications")
 public class Notification {
 
-	public enum Type { ISSUE_ASSIGNED, ISSUE_UPDATED, ISSUE_COMMENTED, MENTION, SPRINT_STARTED, SYSTEM }
+	public enum Type {
+		ISSUE_ASSIGNED, ISSUE_UPDATED, ISSUE_COMMENTED, MENTION, SPRINT_STARTED, SYSTEM,
+		ACCOUNT_ACTIVATED, ACCOUNT_DEACTIVATED, ACCOUNT_ROLE_CHANGED, ACCOUNT_DELETED
+	}
 
 	@Id
 	private String id;

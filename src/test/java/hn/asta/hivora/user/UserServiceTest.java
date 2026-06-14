@@ -3,6 +3,7 @@ package hn.asta.hivora.user;
 import hn.asta.hivora.common.ApiException;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.springframework.data.mongodb.core.MongoTemplate;
 import org.springframework.security.crypto.bcrypt.BCryptPasswordEncoder;
 
 import java.util.Optional;
@@ -24,7 +25,7 @@ class UserServiceTest {
 	void setUp() {
 		users = mock(UserRepository.class);
 		when(users.save(any(User.class))).thenAnswer(invocation -> invocation.getArgument(0));
-		service = new UserService(users, new BCryptPasswordEncoder(4));
+		service = new UserService(users, new BCryptPasswordEncoder(4), mock(MongoTemplate.class));
 	}
 
 	@Test

@@ -2,6 +2,7 @@ package hn.asta.hivora.user;
 
 import hn.asta.hivora.auth.CurrentUser;
 import hn.asta.hivora.common.ApiException;
+import hn.asta.hivora.notification.NotificationService;
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.Email;
 import jakarta.validation.constraints.NotBlank;
@@ -24,6 +25,7 @@ public class UserController {
 	private final UserRepository users;
 	private final UserService userService;
 	private final CurrentUser currentUser;
+	private final NotificationService notifications;
 
 	public record DirectoryUser(String id, String username, String displayName, String avatarUrl,
 			String title) {
@@ -87,17 +89,67 @@ public class UserController {
 	@PreAuthorize("hasRole('ADMIN')")
 	public User adminUpdate(@PathVariable String id, @RequestBody @Valid AdminUpdateUserRequest request) {
 		User user = userService.get(id);
-		if (request.active() != null) {
-			if (!request.active() && user.getId().equals(currentUser.requireId())) {
-				throw ApiException.badRequest("You cannot deactivate yourself");
-			}
-			user.setActive(request.active());
-		}
-		if (request.admin() != null) {
-			user.setRoles(request.admin() ? Set.of(Role.ADMIN, Role.MEMBER) : Set.of(Role.MEMBER));
-		}
+		boolean wasActive = user.isActive();
+		boolean wasAdmin = user.isAdmin();
+
+		if (request.active() != null) applyActive(user, request.active(), wasAdmin);
+		if (request.admin() != null) applyAdmin(user, request.admin(), wasAdmin);
 		if (request.displayName() != null) user.setDisplayName(request.displayName());
 		if (request.title() != null) user.setTitle(request.title());
-		return users.save(user);
+
+		User saved = users.save(user);
+		notifyAccountChanges(saved, wasActive, wasAdmin);
+		return saved;
+	}
+
+	private void applyActive(User user, boolean active, boolean wasAdmin) {
+		if (!active) {
+			if (user.getId().equals(currentUser.requireId())) {
+				throw ApiException.badRequest("You cannot deactivate yourself");
+			}
+			if (wasAdmin) requireAnotherActiveAdmin(user, "deactivate the last administrator");
+		}
+		user.setActive(active);
+	}
+
+	private void applyAdmin(User user, boolean admin, boolean wasAdmin) {
+		if (!admin && wasAdmin) {
+			requireAnotherActiveAdmin(user, "remove admin from the last administrator");
+		}
+		user.setRoles(admin ? Set.of(Role.ADMIN, Role.MEMBER) : Set.of(Role.MEMBER));
+	}
+
+	/** Notify the affected user of meaningful account changes (status / roles). */
+	private void notifyAccountChanges(User saved, boolean wasActive, boolean wasAdmin) {
+		if (saved.isActive() != wasActive) {
+			if (saved.isActive()) notifications.notifyAccountActivated(saved);
+			else notifications.notifyAccountDeactivated(saved);
+		}
+		if (saved.isAdmin() != wasAdmin) {
+			notifications.notifyRolesChanged(saved);
+		}
+	}
+
+	@DeleteMapping("/api/v1/admin/users/{id}")
+	@PreAuthorize("hasRole('ADMIN')")
+	@ResponseStatus(HttpStatus.NO_CONTENT)
+	public void delete(@PathVariable String id) {
+		User user = userService.get(id);
+		if (user.getId().equals(currentUser.requireId())) {
+			throw ApiException.badRequest("You cannot delete your own account");
+		}
+		if (user.isAdmin()) {
+			requireAnotherActiveAdmin(user, "delete the last administrator");
+		}
+		// E-mail the user before the account (and its data) are removed.
+		notifications.notifyAccountDeleted(user);
+		userService.delete(user);
+	}
+
+	/** Guards against locking the organization out by removing its last active admin. */
+	private void requireAnotherActiveAdmin(User user, String action) {
+		if (users.countByRolesContainingAndActiveIsTrueAndIdNot(Role.ADMIN, user.getId()) == 0) {
+			throw ApiException.conflict("You cannot " + action);
+		}
 	}
 }

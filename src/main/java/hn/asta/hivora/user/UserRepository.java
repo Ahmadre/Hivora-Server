@@ -15,4 +15,7 @@ public interface UserRepository extends MongoRepository<User, String> {
 	boolean existsByUsernameIgnoreCase(String username);
 
 	long countByRolesContaining(Role role);
+
+	/** Active admins other than {@code id} – used to prevent locking out the last admin. */
+	long countByRolesContainingAndActiveIsTrueAndIdNot(Role role, String id);
 }

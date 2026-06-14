@@ -40,3 +40,6 @@ deploy/mongo-keyfile
 deploy/x509/dev/
 deploy/x509/prod/
 !deploy/x509/*.sh
+
+# macOS Finder metadata files
+.DS_Store
