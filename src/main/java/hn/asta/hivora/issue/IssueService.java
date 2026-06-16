@@ -13,6 +13,7 @@ import org.springframework.data.domain.Sort;
 import org.springframework.data.mongodb.core.MongoTemplate;
 import org.springframework.data.mongodb.core.query.Criteria;
 import org.springframework.data.mongodb.core.query.Query;
+import org.springframework.data.mongodb.core.query.Update;
 import org.springframework.stereotype.Service;
 
 import java.time.Instant;
@@ -117,6 +118,20 @@ public class IssueService {
 		comments.deleteByIssueId(issue.getId());
 		activities.deleteByIssueId(issue.getId());
 		issues.delete(issue);
+	}
+
+	/** Permanently deletes a label from a project: removes it from the project's
+	 * vocabulary and pulls it from every issue in the project that carries it. */
+	public void removeProjectLabel(String projectId, String label, User user) {
+		Project project = projects.get(projectId);
+		if (user != null) projects.assertMember(project, user);
+		if (project.getLabels() != null && project.getLabels().remove(label)) {
+			projects.save(project);
+		}
+		mongo.updateMulti(
+				new Query(Criteria.where("projectId").is(projectId).and("tags").is(label)),
+				new Update().pull("tags", label),
+				Issue.class);
 	}
 
 	/** Adds any new issue tags to the project's reusable label vocabulary so

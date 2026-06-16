@@ -1,6 +1,7 @@
 package hn.asta.hivora.project;
 
 import hn.asta.hivora.auth.CurrentUser;
+import hn.asta.hivora.issue.IssueService;
 import hn.asta.hivora.user.User;
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.NotBlank;
@@ -19,6 +20,7 @@ import java.util.List;
 public class ProjectController {
 
 	private final ProjectService projectService;
+	private final IssueService issueService;
 	private final CurrentUser currentUser;
 
 	public record CreateProjectRequest(
@@ -81,5 +83,12 @@ public class ProjectController {
 		if (request.color() != null) project.setColor(request.color());
 		if (request.archived() != null) project.setArchived(request.archived());
 		return projectService.save(project);
+	}
+
+	/** Permanently deletes a label from the project and every issue using it. */
+	@DeleteMapping("/{id}/labels")
+	@ResponseStatus(HttpStatus.NO_CONTENT)
+	public void deleteLabel(@PathVariable String id, @RequestParam String label) {
+		issueService.removeProjectLabel(id, label, currentUser.require());
 	}
 }
