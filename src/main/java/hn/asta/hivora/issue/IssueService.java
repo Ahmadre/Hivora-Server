@@ -61,6 +61,11 @@ public class IssueService {
 		if (issue.getState() == null || !project.getWorkflowStates().contains(issue.getState())) {
 			issue.setState(project.getWorkflowStates().get(0));
 		}
+		// An issue created straight into a sprint belongs on the sprint board, not
+		// in the backlog — start it in the first working state.
+		if (issue.getSprintId() != null && !issue.getSprintId().isBlank()) {
+			promoteFromBacklog(issue, project);
+		}
 		if (author != null) {
 			issue.setReporterId(author.getId());
 		}
@@ -118,12 +123,16 @@ public class IssueService {
 		mutator.accept(issue);
 
 		Project project = projects.get(issue.getProjectId());
-		// Pulling a backlog issue into a sprint moves it onto the sprint board:
-		// auto-advance it out of the Backlog state so it's actually workable
-		// there (the sprint board hides the backlog column).
-		if (previousSprint == null && issue.getSprintId() != null
-				&& !issue.getSprintId().isBlank()) {
+		// Keep the issue's state in step with its sprint membership:
+		//  • pulled into a sprint  → advance out of Backlog (it's now on the board);
+		//  • returned to backlog   → drop back to the Backlog state.
+		boolean hadSprint = previousSprint != null && !previousSprint.isBlank();
+		boolean hasSprint = issue.getSprintId() != null && !issue.getSprintId().isBlank();
+		if (!hadSprint && hasSprint) {
 			promoteFromBacklog(issue, project);
+		}
+		else if (hadSprint && !hasSprint) {
+			demoteToBacklog(issue, project);
 		}
 		if (!project.getWorkflowStates().contains(issue.getState())) {
 			throw ApiException.badRequest("error.issue.unknownState", issue.getState());
@@ -159,6 +168,20 @@ public class IssueService {
 		}
 		for (String state : project.getWorkflowStates()) {
 			if (!isBacklogState(state)) {
+				issue.setState(state);
+				return;
+			}
+		}
+	}
+
+	/** Returns an issue to the Backlog state when it leaves a sprint, when the
+	 * project actually has a backlog state. */
+	private void demoteToBacklog(Issue issue, Project project) {
+		if (isBacklogState(issue.getState())) {
+			return;
+		}
+		for (String state : project.getWorkflowStates()) {
+			if (isBacklogState(state)) {
 				issue.setState(state);
 				return;
 			}
