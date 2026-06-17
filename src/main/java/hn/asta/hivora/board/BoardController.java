@@ -6,6 +6,7 @@ import hn.asta.hivora.issue.Issue;
 import hn.asta.hivora.issue.IssueRepository;
 import hn.asta.hivora.project.Project;
 import hn.asta.hivora.project.ProjectService;
+import hn.asta.hivora.user.User;
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.NotEmpty;
@@ -20,6 +21,7 @@ import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.List;
 import java.util.Set;
+import java.util.stream.Collectors;
 
 @Tag(name = "Boards")
 @RestController
@@ -50,16 +52,32 @@ public class BoardController {
 
 	@GetMapping
 	public List<AgileBoard> list(@RequestParam(required = false) String projectId) {
-		currentUser.require();
+		User user = currentUser.require();
 		List<AgileBoard> all = projectId != null
 				? boards.findByProjectIdsContains(projectId)
 				: boards.findAll();
-		// Hide boards whose only project(s) are archived — an archived project is
-		// deactivated, so its boards must not surface.
-		Set<String> active = projects.activeProjectIds();
+		// Only surface boards the user may actually open. visibleTo already
+		// excludes archived projects (a deactivated project's boards must never
+		// surface) and applies direct-membership + team-grant access — mirroring
+		// SprintService.assertAccess, so the overview matches what a card click
+		// would allow. Admins see every active project's boards.
+		Set<String> visible = visibleProjectIds(user);
 		return all.stream()
-				.filter(b -> b.getProjectIds().stream().anyMatch(active::contains))
+				.filter(b -> b.getProjectIds().stream().anyMatch(visible::contains))
 				.toList();
+	}
+
+	/** Ids of the projects the user may see (deduped, archived excluded). */
+	private Set<String> visibleProjectIds(User user) {
+		return projects.visibleTo(user).stream().map(Project::getId).collect(Collectors.toSet());
+	}
+
+	/** A board is accessible if it spans at least one project the user may see. */
+	private void assertBoardAccess(AgileBoard board, User user) {
+		if (user.isAdmin()) return;
+		if (board.getProjectIds().stream().noneMatch(visibleProjectIds(user)::contains)) {
+			throw ApiException.forbidden("error.accessDenied");
+		}
 	}
 
 	@PostMapping
@@ -83,8 +101,9 @@ public class BoardController {
 
 	@GetMapping("/{id}")
 	public BoardView view(@PathVariable String id, @RequestParam(required = false) String sprintId) {
-		currentUser.require();
+		User user = currentUser.require();
 		AgileBoard board = boards.findById(id).orElseThrow(() -> ApiException.notFound("board"));
+		assertBoardAccess(board, user);
 		List<Sprint> boardSprints = sprints.findByBoardIdOrderByStartDateDesc(id);
 		String effectiveSprint = sprintId != null ? sprintId : board.getActiveSprintId();
 
@@ -115,8 +134,9 @@ public class BoardController {
 
 	@PatchMapping("/{id}")
 	public AgileBoard update(@PathVariable String id, @RequestBody AgileBoard updated) {
-		currentUser.require();
+		User user = currentUser.require();
 		AgileBoard board = boards.findById(id).orElseThrow(() -> ApiException.notFound("board"));
+		assertBoardAccess(board, user);
 		if (updated.getName() != null) board.setName(updated.getName());
 		if (updated.getType() != null) board.setType(updated.getType());
 		if (updated.getProjectIds() != null && !updated.getProjectIds().isEmpty()) {
@@ -132,15 +152,19 @@ public class BoardController {
 	@DeleteMapping("/{id}")
 	@ResponseStatus(HttpStatus.NO_CONTENT)
 	public void delete(@PathVariable String id) {
-		currentUser.require();
-		boards.deleteById(id);
+		User user = currentUser.require();
+		boards.findById(id).ifPresent(board -> {
+			assertBoardAccess(board, user);
+			boards.deleteById(id);
+		});
 	}
 
 	@PostMapping("/{id}/sprints")
 	@ResponseStatus(HttpStatus.CREATED)
 	public Sprint createSprint(@PathVariable String id, @RequestBody @Valid SprintRequest request) {
-		currentUser.require();
-		boards.findById(id).orElseThrow(() -> ApiException.notFound("board"));
+		User user = currentUser.require();
+		AgileBoard board = boards.findById(id).orElseThrow(() -> ApiException.notFound("board"));
+		assertBoardAccess(board, user);
 		return sprints.save(Sprint.builder()
 				.boardId(id)
 				.name(request.name())
