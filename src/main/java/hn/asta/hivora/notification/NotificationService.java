@@ -48,6 +48,59 @@ public class NotificationService {
 				issueLink(issue));
 	}
 
+	// --- Team membership events ----------------------------------------------
+	// Fan-out to the single affected user (in-app + e-mail), localized to their
+	// own UI language. [teamName]/[teamId] are passed in so the caller need not
+	// expose the Team type to this package.
+
+	public void notifyAddedToTeam(String userId, String teamId, String teamName) {
+		users.findById(userId).filter(User::isActive).ifPresent(user -> {
+			String title = de(user) ? "Zu einem Team hinzugefügt" : "Added to a team";
+			String body = de(user)
+					? "Du wurdest dem Team \"" + teamName + "\" hinzugefügt."
+					: "You've been added to the team \"" + teamName + "\".";
+			deliverOne(user, Notification.Type.TEAM_ADDED, title, body, teamLink(teamId));
+		});
+	}
+
+	public void notifyTeamRoleChanged(String userId, String teamId, String teamName, boolean admin) {
+		users.findById(userId).filter(User::isActive).ifPresent(user -> {
+			String title = de(user) ? "Team-Rolle aktualisiert" : "Team role updated";
+			String body;
+			if (de(user)) {
+				body = admin
+						? "Du bist jetzt Team-Admin von \"" + teamName + "\"."
+						: "Deine Rolle in \"" + teamName + "\" ist jetzt Mitglied.";
+			}
+			else {
+				body = admin
+						? "You are now a Team-Admin of \"" + teamName + "\"."
+						: "Your role in \"" + teamName + "\" is now Member.";
+			}
+			deliverOne(user, Notification.Type.TEAM_ROLE_CHANGED, title, body, teamLink(teamId));
+		});
+	}
+
+	public void notifyRemovedFromTeam(String userId, String teamName) {
+		users.findById(userId).filter(User::isActive).ifPresent(user -> {
+			String title = de(user) ? "Aus einem Team entfernt" : "Removed from a team";
+			String body = de(user)
+					? "Du wurdest aus dem Team \"" + teamName + "\" entfernt."
+					: "You've been removed from the team \"" + teamName + "\".";
+			deliverOne(user, Notification.Type.TEAM_REMOVED, title, body, null);
+		});
+	}
+
+	private void deliverOne(User user, Notification.Type type, String title, String body, String link) {
+		notifications.save(Notification.builder()
+				.userId(user.getId()).type(type).title(title).body(body).link(link).build());
+		mail.send(user.getEmail(), SUBJECT_PREFIX + title, title, body, link);
+	}
+
+	private String teamLink(String teamId) {
+		return "/teams/" + teamId;
+	}
+
 	// --- Account lifecycle events ---------------------------------------------
 	// These always reach the affected user by e-mail (even once deactivated or
 	// deleted), so they bypass the active-user filter used for issue fan-out.

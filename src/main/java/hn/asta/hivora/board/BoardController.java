@@ -63,7 +63,7 @@ public class BoardController {
 		// Default columns mirror the first project's workflow.
 		Project first = projects.get(request.projectIds().get(0));
 		List<AgileBoard.Column> columns = new ArrayList<>();
-		for (String state : first.getWorkflowStates()) {
+		for (String state : first.workflowStateNames()) {
 			columns.add(AgileBoard.Column.builder().name(state).states(List.of(state)).build());
 		}
 		return boards.save(AgileBoard.builder()

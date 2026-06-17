@@ -58,8 +58,8 @@ public class IssueService {
 			projects.assertMember(project, author); // only project members may add issues (A01)
 		}
 		assignIssueNumber(issue, project);
-		if (issue.getState() == null || !project.getWorkflowStates().contains(issue.getState())) {
-			issue.setState(project.getWorkflowStates().get(0));
+		if (issue.getState() == null || !project.workflowStateNames().contains(issue.getState())) {
+			issue.setState(project.workflowStateNames().get(0));
 		}
 		// An issue created straight into a sprint belongs on the sprint board, not
 		// in the backlog — start it in the first working state.
@@ -134,7 +134,7 @@ public class IssueService {
 		else if (hadSprint && !hasSprint) {
 			demoteToBacklog(issue, project);
 		}
-		if (!project.getWorkflowStates().contains(issue.getState())) {
+		if (!project.workflowStateNames().contains(issue.getState())) {
 			throw ApiException.badRequest("error.issue.unknownState", issue.getState());
 		}
 		boolean nowResolved = project.getResolvedStates().contains(issue.getState());
@@ -166,7 +166,7 @@ public class IssueService {
 		if (!isBacklogState(issue.getState())) {
 			return;
 		}
-		for (String state : project.getWorkflowStates()) {
+		for (String state : project.workflowStateNames()) {
 			if (!isBacklogState(state)) {
 				issue.setState(state);
 				return;
@@ -180,7 +180,7 @@ public class IssueService {
 		if (isBacklogState(issue.getState())) {
 			return;
 		}
-		for (String state : project.getWorkflowStates()) {
+		for (String state : project.workflowStateNames()) {
 			if (isBacklogState(state)) {
 				issue.setState(state);
 				return;
@@ -201,7 +201,8 @@ public class IssueService {
 	public void removeProjectLabel(String projectId, String label, User user) {
 		Project project = projects.get(projectId);
 		if (user != null) projects.assertMember(project, user);
-		if (project.getLabels() != null && project.getLabels().remove(label)) {
+		if (project.getLabels() != null
+				&& project.getLabels().removeIf(l -> l.getName().equals(label))) {
 			projects.save(project);
 		}
 		mongo.updateMulti(
@@ -214,15 +215,20 @@ public class IssueService {
 	 * they can be suggested when tagging other issues in the same project. */
 	private void mergeProjectLabels(Project project, List<String> tags) {
 		if (tags == null || tags.isEmpty()) return;
-		List<String> labels = project.getLabels();
+		List<Project.Label> labels = project.getLabels();
 		if (labels == null) {
 			labels = new ArrayList<>();
 			project.setLabels(labels);
 		}
+		java.util.Set<String> existing = new java.util.HashSet<>(project.labelNames());
 		boolean changed = false;
 		for (String tag : tags) {
-			if (tag != null && !tag.isBlank() && !labels.contains(tag)) {
-				labels.add(tag);
+			if (tag != null && !tag.isBlank() && existing.add(tag)) {
+				labels.add(Project.Label.builder()
+						.id(Project.newId())
+						.name(tag)
+						.hue(Project.labelHueAt(labels.size()))
+						.build());
 				changed = true;
 			}
 		}

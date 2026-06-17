@@ -30,20 +30,11 @@ public class ProjectController {
 			String color) {
 	}
 
-	public record UpdateProjectRequest(
-			@Size(max = 120) String name,
-			@Size(max = 4000) String description,
-			String leadId,
-			List<String> memberIds,
-			List<String> workflowStates,
-			List<String> resolvedStates,
-			String color,
-			Boolean archived) {
-	}
-
 	@GetMapping
-	public List<Project> list() {
-		return projectService.visibleTo(currentUser.require());
+	public List<Project> list(
+			@RequestParam(required = false, defaultValue = "false") boolean archived) {
+		User user = currentUser.require();
+		return archived ? projectService.archivedVisibleTo(user) : projectService.visibleTo(user);
 	}
 
 	@GetMapping("/{id}")
@@ -68,21 +59,8 @@ public class ProjectController {
 	}
 
 	@PatchMapping("/{id}")
-	public Project update(@PathVariable String id, @RequestBody @Valid UpdateProjectRequest request) {
-		User user = currentUser.require();
-		Project project = projectService.get(id);
-		projectService.assertMember(project, user);
-		if (request.name() != null) project.setName(request.name());
-		if (request.description() != null) project.setDescription(request.description());
-		if (request.leadId() != null) project.setLeadId(request.leadId());
-		if (request.memberIds() != null) project.setMemberIds(request.memberIds());
-		if (request.workflowStates() != null && !request.workflowStates().isEmpty()) {
-			project.setWorkflowStates(request.workflowStates());
-		}
-		if (request.resolvedStates() != null) project.setResolvedStates(request.resolvedStates());
-		if (request.color() != null) project.setColor(request.color());
-		if (request.archived() != null) project.setArchived(request.archived());
-		return projectService.save(project);
+	public Project update(@PathVariable String id, @RequestBody @Valid ProjectUpdateRequest request) {
+		return projectService.applyUpdate(id, request, currentUser.require());
 	}
 
 	/** Permanently deletes a label from the project and every issue using it. */
