@@ -19,7 +19,10 @@ import org.springframework.web.bind.annotation.*;
 import java.time.LocalDate;
 import java.util.ArrayList;
 import java.util.Comparator;
+import java.util.HashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
 import java.util.stream.Collectors;
 
@@ -109,8 +112,16 @@ public class BoardController {
 
 		List<Issue> candidates = new ArrayList<>();
 		Set<String> active = projects.activeProjectIds();
+		// Columns are derived live from the board's active projects' *current*
+		// workflow states (in order, deduped) — never the stale snapshot stored on
+		// the board — so renames/additions/deletions in project settings are
+		// always reflected here. WIP limits from the stored columns are carried
+		// over by matching column name.
+		LinkedHashSet<String> stateNames = new LinkedHashSet<>();
 		for (String projectId : board.getProjectIds()) {
 			if (!active.contains(projectId)) continue; // skip archived projects
+			projects.findOptional(projectId)
+					.ifPresent(p -> stateNames.addAll(p.workflowStateNames()));
 			if (effectiveSprint != null) {
 				candidates.addAll(issues.findByProjectIdAndSprintId(projectId, effectiveSprint));
 			}
@@ -121,13 +132,17 @@ public class BoardController {
 		}
 		candidates.sort(Comparator.comparingDouble(Issue::getRank));
 
-		List<BoardColumnView> columnViews = new ArrayList<>();
+		Map<String, Integer> wipByName = new HashMap<>();
 		for (AgileBoard.Column column : board.getColumns()) {
+			if (column.getWipLimit() != null) wipByName.put(column.getName(), column.getWipLimit());
+		}
+
+		List<BoardColumnView> columnViews = new ArrayList<>();
+		for (String name : stateNames) {
 			List<Issue> inColumn = candidates.stream()
-					.filter(issue -> column.getStates().contains(issue.getState()))
+					.filter(issue -> name.equals(issue.getState()))
 					.toList();
-			columnViews.add(new BoardColumnView(column.getName(), column.getStates(),
-					column.getWipLimit(), inColumn));
+			columnViews.add(new BoardColumnView(name, List.of(name), wipByName.get(name), inColumn));
 		}
 		return new BoardView(board, boardSprints, columnViews);
 	}
