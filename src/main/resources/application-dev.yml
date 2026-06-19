@@ -17,10 +17,13 @@ hinata:
       trust-store: ${HINATA_MONGO_TLS_TRUSTSTORE:deploy/x509/dev/truststore.p12}
       trust-store-password: ${HINATA_MONGO_TLS_TRUSTSTORE_PASSWORD:changeit}
   # Populate a realistic English demo workspace on boot (idempotent — skips once
-  # any project exists). Reuse it for clicking through the app and for capturing
-  # screenshots. Login after seeding: rebar / hinata-demo-2026
+  # any project exists). Reuse it for clicking through the app, for tests, and for
+  # capturing screenshots. Login after seeding: rebar / hinata-demo-2026
   demo:
     seed: ${HINATA_DEMO_SEED:false}
+    # reset=true wipes the workspace and re-seeds the same dataset on every boot,
+    # so tests start from a deterministic state. Requires seed=true. Never prod.
+    reset: ${HINATA_DEMO_RESET:false}
 
 # Full API docs (Scalar UI) are convenient in dev.
 springdoc:

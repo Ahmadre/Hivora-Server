@@ -4,6 +4,7 @@ import com.ahmadre.hinata.board.AgileBoard;
 import com.ahmadre.hinata.board.AgileBoardRepository;
 import com.ahmadre.hinata.board.Sprint;
 import com.ahmadre.hinata.board.SprintRepository;
+import com.ahmadre.hinata.config.HinataProperties;
 import com.ahmadre.hinata.issue.Issue;
 import com.ahmadre.hinata.issue.IssueRepository;
 import com.ahmadre.hinata.project.Project;
@@ -25,6 +26,7 @@ import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.boot.context.event.ApplicationReadyEvent;
+import org.springframework.context.annotation.Profile;
 import org.springframework.context.event.EventListener;
 import org.springframework.data.domain.Sort;
 import org.springframework.data.mongodb.core.MongoTemplate;
@@ -53,10 +55,19 @@ import java.util.Set;
  * It also completes first-run setup (organization + admin) when needed, so a
  * brand-new database becomes immediately login-ready.</p>
  *
- * <p>Login after seeding: {@code rebar} / {@code hinata-demo-2026} (admin).</p>
+ * <p>For repeatable tests, set {@code hinata.demo.reset=true}
+ * (env {@code HINATA_DEMO_RESET=true}) to wipe the workspace and re-seed the same
+ * deterministic dataset on every boot.</p>
+ *
+ * <p>Never runs in production: the bean is {@code @Profile("!prod")}, so even if
+ * {@code HINATA_DEMO_SEED=true} leaks into a prod environment it is simply not
+ * created.</p>
+ *
+ * <p>Login after seeding: {@code admin} / {@code hinata-demo-2026} (admin).</p>
  */
 @Slf4j
 @Component
+@Profile("!prod")
 @RequiredArgsConstructor
 @ConditionalOnProperty(name = "hinata.demo.seed", havingValue = "true")
 public class DemoSeeder {
@@ -64,6 +75,7 @@ public class DemoSeeder {
 	/** Shared password for every demo account (>= UserService.MIN_PASSWORD_LENGTH). */
 	public static final String DEMO_PASSWORD = "hinata-demo-2026";
 
+	private final HinataProperties properties;
 	private final SettingsService settings;
 	private final UserService userService;
 	private final UserRepository users;
@@ -79,6 +91,10 @@ public class DemoSeeder {
 
 	@EventListener(ApplicationReadyEvent.class)
 	public void seed() {
+		if (properties.getDemo().isReset()) {
+			log.warn("[demo] reset=true — wiping existing workspace data before re-seeding");
+			resetWorkspace();
+		}
 		if (projects.count() > 0) {
 			log.info("[demo] projects already present — skipping demo seed");
 			return;
@@ -86,33 +102,33 @@ public class DemoSeeder {
 		log.info("[demo] seeding demo workspace …");
 
 		// --- people ---------------------------------------------------------
-		User rebar = ensureAdmin();
+		User admin = ensureAdmin();
 		User tomas = person("tomas@hinata.dev", "tomas", "Tomáš Horák", "Backend Engineer");
 		User lena = person("lena@hinata.dev", "lena", "Lena Vogt", "Product Design");
 		User amara = person("amara@hinata.dev", "amara", "Amara Okafor", "Frontend Engineer");
 		User mei = person("mei@hinata.dev", "mei", "Mei Lin", "QA Engineer");
 		User jonas = person("jonas@hinata.dev", "jonas", "Jonas Becker", "DevOps Engineer");
-		List<User> everyone = List.of(rebar, tomas, lena, amara, mei, jonas);
+		List<User> everyone = List.of(admin, tomas, lena, amara, mei, jonas);
 
 		// --- projects -------------------------------------------------------
 		Project hin = project("HIN", "Hinata Platform",
 				"Self-hosted project & issue tracking — the product itself.",
-				"#D9A032", rebar, everyone);
+				"#D9A032", admin, everyone);
 		Project mob = project("MOB", "Mobile App",
 				"Flutter clients for iOS, Android, macOS and the web.",
-				"#AEC6F4", amara, List.of(rebar, amara, lena, mei));
+				"#AEC6F4", amara, List.of(admin, amara, lena, mei));
 		Project inf = project("INF", "Infrastructure",
 				"Self-host bundle, CI/CD, observability and the deploy story.",
-				"#9BE0C7", jonas, List.of(rebar, jonas, tomas));
+				"#9BE0C7", jonas, List.of(admin, jonas, tomas));
 
 		// --- teams ----------------------------------------------------------
-		team("CORE", "Core Platform", "hexagon", 70, rebar,
-				List.of(hin, inf), List.of(rebar, tomas, jonas));
+		team("CORE", "Core Platform", "hexagon", 70, admin,
+				List.of(hin, inf), List.of(admin, tomas, jonas));
 		team("DSGN", "Design & Mobile", "palette", 300, lena,
 				List.of(mob), List.of(lena, amara, mei));
 
 		// --- scrum board + sprints for HIN ---------------------------------
-		AgileBoard board = board(hin, rebar);
+		AgileBoard board = board(hin, admin);
 		LocalDate today = LocalDate.now();
 		Sprint s22 = sprint(board, "Sprint 22", "Stabilize attachments & SSE sync",
 				today.minusDays(35), today.minusDays(21), 36, true);
@@ -124,19 +140,39 @@ public class DemoSeeder {
 		boards.save(board);
 
 		// --- issues ---------------------------------------------------------
-		seedHinIssues(hin, board, s22, s23, s24, rebar, tomas, lena, amara, mei, jonas);
-		seedSideIssues(mob, amara, lena, mei, rebar);
-		seedSideIssues(inf, jonas, tomas, rebar, mei);
+		seedHinIssues(hin, board, s22, s23, s24, admin, tomas, lena, amara, mei, jonas);
+		seedSideIssues(mob, amara, lena, mei, admin);
+		seedSideIssues(inf, jonas, tomas, admin, mei);
 
 		// Give a slice of HIN issues real start/due dates (+ a dependency chain)
 		// so the Gantt / Timeline surface renders bars instead of an empty state.
 		scheduleTimeline(hin);
 
 		// --- this week's tracked work for the admin ------------------------
-		seedTracker(rebar, hin);
+		seedTracker(admin, hin);
 
-		log.info("[demo] done — {} users, {} projects, {} issues. Login: rebar / {}",
+		log.info("[demo] done — {} users, {} projects, {} issues. Login: admin / {}",
 				users.count(), projects.count(), issues.count(), DEMO_PASSWORD);
+	}
+
+	/**
+	 * Drops every collection the seeder owns and re-opens first-run setup, so the
+	 * idempotent guard passes and {@link #seed()} rebuilds a pristine workspace.
+	 * Safe because the bean is {@code @Profile("!prod")} — this never runs in prod.
+	 */
+	private void resetWorkspace() {
+		mongo.dropCollection(WorkItem.class);
+		mongo.dropCollection(Issue.class);
+		mongo.dropCollection(Sprint.class);
+		mongo.dropCollection(AgileBoard.class);
+		mongo.dropCollection(Team.class);
+		mongo.dropCollection(Project.class);
+		mongo.dropCollection(User.class);
+		counters.clear();
+		// Re-open setup so ensureAdmin() recreates a clean demo admin.
+		ServerSettings s = settings.get();
+		s.setSetupCompleted(false);
+		settings.save(s);
 	}
 
 	// ---- builders ----------------------------------------------------------
@@ -146,10 +182,10 @@ public class DemoSeeder {
 		User admin;
 		if (s.isSetupCompleted()) {
 			admin = users.findAll().stream().filter(User::isAdmin).findFirst()
-					.orElseGet(() -> userService.createLocal("admin@hinata.dev", "rebar",
+					.orElseGet(() -> userService.createLocal("admin@hinata.dev", "admin",
 							"Rebar Ahmad", DEMO_PASSWORD, Set.of(Role.ADMIN, Role.MEMBER)));
 		} else {
-			admin = userService.createLocal("admin@hinata.dev", "rebar", "Rebar Ahmad",
+			admin = userService.createLocal("admin@hinata.dev", "admin", "Rebar Ahmad",
 					DEMO_PASSWORD, Set.of(Role.ADMIN, Role.MEMBER));
 			s.setOrganizationName("Hinata");
 			s.setSetupCompleted(true);
@@ -238,7 +274,7 @@ public class DemoSeeder {
 
 	/** Curated HIN backlog: the dense board/dashboard/sprint/report surface. */
 	private void seedHinIssues(Project p, AgileBoard board, Sprint s22, Sprint s23, Sprint s24,
-			User rebar, User tomas, User lena, User amara, User mei, User jonas) {
+			User admin, User tomas, User lena, User amara, User mei, User jonas) {
 		// --- active sprint (Sprint 24): in-flight work ---------------------
 		issue(p, "Redesign the agile board with calmer column rhythm", Issue.Type.FEATURE,
 				Issue.Priority.MAJOR, "In Progress", lena, s24, 5, 240, 95,
@@ -247,7 +283,7 @@ public class DemoSeeder {
 				Issue.Priority.CRITICAL, "In Progress", amara, s24, 3, 180, 130,
 				List.of("performance"), null, 1);
 		issue(p, "Issue detail: inline edit for estimate & spent", Issue.Type.FEATURE,
-				Issue.Priority.NORMAL, "In Progress", rebar, s24, 3, 150, 70,
+				Issue.Priority.NORMAL, "In Progress", admin, s24, 3, 150, 70,
 				List.of(), null, 7);
 		issue(p, "Adaptive icon clips on Android 13 themed mode", Issue.Type.BUG,
 				Issue.Priority.MAJOR, "Open", mei, s24, 2, 90, 0,
@@ -262,19 +298,19 @@ public class DemoSeeder {
 				Issue.Priority.MINOR, "In Review", amara, s24, 1, 45, 40,
 				List.of(), null, 0);
 		issue(p, "Backlog ordering should persist across reloads", Issue.Type.TASK,
-				Issue.Priority.NORMAL, "Open", rebar, s24, 2, 90, 0,
+				Issue.Priority.NORMAL, "Open", admin, s24, 2, 90, 0,
 				List.of(), -2, 0);
 		issue(p, "Add story-point capacity bar to sprint planning", Issue.Type.FEATURE,
 				Issue.Priority.NORMAL, "Open", lena, s24, 3, 120, 0,
 				List.of("design"), null, 0);
 		// A few more on the admin's plate so the dashboard "Today's focus" fills.
 		issue(p, "Restore drag-handle focus ring after a drop", Issue.Type.BUG,
-				Issue.Priority.CRITICAL, "Open", rebar, s24, 2, 60, 0, List.of(), -1, 0);
+				Issue.Priority.CRITICAL, "Open", admin, s24, 2, 60, 0, List.of(), -1, 0);
 		issue(p, "Sprint capacity overflow not flagged in header", Issue.Type.BUG,
-				Issue.Priority.MAJOR, "Open", rebar, s24, 2, 75, 15,
+				Issue.Priority.MAJOR, "Open", admin, s24, 2, 75, 15,
 				List.of("performance"), -2, 0);
 		issue(p, "Wire ⌘K palette to project quick-switch", Issue.Type.FEATURE,
-				Issue.Priority.MAJOR, "In Progress", rebar, s24, 3, 120, 45,
+				Issue.Priority.MAJOR, "In Progress", admin, s24, 3, 120, 45,
 				List.of(), 1, 3);
 
 		// --- resolved this sprint / last 7d (feeds completion + ranking) ---
@@ -283,7 +319,7 @@ public class DemoSeeder {
 		resolved(p, "Timeline view: snap drag to day grid", Issue.Type.FEATURE,
 				"Done", lena, s24, 3, 150, 140, daysAgo(3));
 		resolved(p, "Keyboard shortcut ⌘K opens command palette", Issue.Type.FEATURE,
-				"Done", rebar, s24, 2, 80, 75, daysAgo(1));
+				"Done", admin, s24, 2, 80, 75, daysAgo(1));
 		resolved(p, "Fix flaky team-access integration test", Issue.Type.TASK,
 				"Done", tomas, s24, 1, 45, 50, daysAgo(4));
 		resolved(p, "Empty-state illustration for backlog", Issue.Type.TASK,
@@ -293,7 +329,7 @@ public class DemoSeeder {
 		resolved(p, "Per-member project access gating", Issue.Type.FEATURE,
 				"Done", tomas, s23, 8, 480, 520, daysAgo(9));
 		resolved(p, "Global ⌘K search & command palette", Issue.Type.FEATURE,
-				"Done", rebar, s23, 5, 300, 290, daysAgo(10));
+				"Done", admin, s23, 5, 300, 290, daysAgo(10));
 		resolved(p, "Colored labels & workflow states editor", Issue.Type.FEATURE,
 				"Done", lena, s23, 5, 260, 250, daysAgo(11));
 		resolved(p, "Liquid-glass overlays across modals", Issue.Type.FEATURE,
@@ -305,7 +341,7 @@ public class DemoSeeder {
 
 		// --- Sprint 22 (closed): older velocity ----------------------------
 		resolved(p, "Issue activity stream & comments", Issue.Type.FEATURE,
-				"Done", rebar, s22, 5, 300, 310, daysAgo(24));
+				"Done", admin, s22, 5, 300, 310, daysAgo(24));
 		resolved(p, "Burndown & velocity report endpoints", Issue.Type.FEATURE,
 				"Done", tomas, s22, 5, 280, 270, daysAgo(25));
 		resolved(p, "Gantt dependencies & critical path", Issue.Type.FEATURE,
@@ -320,7 +356,7 @@ public class DemoSeeder {
 		backlog(p, "Audit log export for compliance", Issue.Type.TASK, jonas, 3, List.of("security"));
 		backlog(p, "Markdown paste handling in comments", Issue.Type.BUG, mei, 2,
 				List.of("good-first-issue"));
-		backlog(p, "Saved board filters per user", Issue.Type.FEATURE, rebar, 3, List.of());
+		backlog(p, "Saved board filters per user", Issue.Type.FEATURE, admin, 3, List.of());
 	}
 
 	/** Lighter, generic fill for the secondary projects. */

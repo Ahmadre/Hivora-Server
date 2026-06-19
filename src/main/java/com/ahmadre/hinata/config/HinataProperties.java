@@ -35,6 +35,25 @@ public class HinataProperties {
 	private Storage storage = new Storage();
 	private Security security = new Security();
 	private Mongodb mongodb = new Mongodb();
+	private Demo demo = new Demo();
+
+	/**
+	 * Demo / test data seeding. Never runs under the {@code prod} profile (see
+	 * {@code DemoSeeder}, which is {@code @Profile("!prod")}); intended for local
+	 * dev and integration tests that need a populated, deterministic workspace.
+	 */
+	@Getter
+	@Setter
+	public static class Demo {
+		/** Seed the demo workspace on boot. Idempotent: skipped once any project exists. */
+		private boolean seed = false;
+		/**
+		 * Wipe the existing workspace (users, projects, boards, sprints, issues,
+		 * teams, tracked work) and re-seed on every boot, so tests get the same
+		 * deterministic dataset. Requires {@link #seed} = true. Ignored in prod.
+		 */
+		private boolean reset = false;
+	}
 
 	@Getter
 	@Setter
