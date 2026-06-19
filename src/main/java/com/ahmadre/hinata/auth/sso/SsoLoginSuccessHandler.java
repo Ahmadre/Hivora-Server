@@ -33,12 +33,16 @@ public class SsoLoginSuccessHandler implements AuthenticationSuccessHandler {
 	private final UserService userService;
 	private final TokenService tokens;
 	private final HinataProperties properties;
+	private final com.ahmadre.hinata.me.SessionService sessions;
+	private final com.ahmadre.hinata.config.ClientIpResolver clientIpResolver;
 
 	@Override
 	public void onAuthenticationSuccess(HttpServletRequest request, HttpServletResponse response,
 			Authentication authentication) throws IOException {
 		User user = provision(authentication);
-		TokenService.TokenPair pair = tokens.issue(user);
+		com.ahmadre.hinata.me.RefreshSession session = sessions.start(user,
+				clientIpResolver.resolve(request), request.getHeader("User-Agent"));
+		TokenService.TokenPair pair = tokens.issue(user, session.getId());
 		String query = "access_token=" + URLEncoder.encode(pair.accessToken(), StandardCharsets.UTF_8)
 				+ "&refresh_token=" + URLEncoder.encode(pair.refreshToken(), StandardCharsets.UTF_8);
 

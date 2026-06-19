@@ -10,8 +10,12 @@ import org.springframework.data.mongodb.core.index.Indexed;
 import org.springframework.data.mongodb.core.index.TextIndexed;
 import org.springframework.data.mongodb.core.mapping.Document;
 
+import com.ahmadre.hinata.me.NotificationPreferences;
+
 import java.time.Instant;
+import java.util.ArrayList;
 import java.util.HashSet;
+import java.util.List;
 import java.util.Set;
 
 @Data
@@ -62,7 +66,63 @@ public class User {
 	@LastModifiedDate
 	private Instant updatedAt;
 
+	// --- Self-service account state (/me surface) ----------------------------
+
+	/** Whether {@link #email} has been proven (double-opt-in). */
+	@Builder.Default
+	private boolean emailVerified = true;
+
+	/** Set while a change to {@link #email} awaits confirmation at the new address. */
+	private String pendingEmail;
+
+	/** BCrypt hash of the pending email-change token; never serialized. */
+	@JsonIgnore
+	private String emailChangeTokenHash;
+
+	private Instant emailChangeExpiresAt;
+
+	/** BCrypt hash of the one-time password-reset token; never serialized. */
+	@JsonIgnore
+	private String passwordResetTokenHash;
+
+	private Instant passwordResetExpiresAt;
+
+	private Instant passwordChangedAt;
+
+	// --- Two-factor (TOTP) ---------------------------------------------------
+
+	@Builder.Default
+	private boolean totpEnabled = false;
+
+	/** Active Base32 TOTP secret; never serialized. Encrypt at rest in prod. */
+	@JsonIgnore
+	private String totpSecret;
+
+	/** Base32 secret held during enrolment until the first code verifies. */
+	@JsonIgnore
+	private String totpPendingSecret;
+
+	/** BCrypt hashes of the unused recovery codes; never serialized. */
+	@JsonIgnore
+	@Builder.Default
+	private List<String> recoveryCodeHashes = new ArrayList<>();
+
+	private Instant totpEnabledAt;
+
+	// --- Notification preferences (matrix + master channel switches) ---------
+
+	@Builder.Default
+	private NotificationPreferences notificationPreferences = NotificationPreferences.defaults();
+
 	public boolean isAdmin() {
 		return roles != null && roles.contains(Role.ADMIN);
+	}
+
+	public boolean isSso() {
+		return origin != null && origin != Origin.LOCAL;
+	}
+
+	public int recoveryCodesRemaining() {
+		return recoveryCodeHashes == null ? 0 : recoveryCodeHashes.size();
 	}
 }

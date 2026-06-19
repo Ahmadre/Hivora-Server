@@ -20,8 +20,10 @@ public class TokenService {
 
 	public static final String CLAIM_ROLES = "roles";
 	public static final String CLAIM_TYPE = "type";
+	public static final String CLAIM_SID = "sid";
 	public static final String TYPE_ACCESS = "access";
 	public static final String TYPE_REFRESH = "refresh";
+	public static final String TYPE_MFA = "mfa";
 
 	private final JwtEncoder encoder;
 	private final HinataProperties properties;
@@ -35,28 +37,59 @@ public class TokenService {
 	}
 
 	public TokenPair issue(User user) {
+		return issue(user, null);
+	}
+
+	/**
+	 * Issues a token pair carrying {@code sessionId} as the {@code sid} claim, so
+	 * the device's session can be tracked and revoked. A null session id keeps
+	 * the token session-less (legacy / service tokens).
+	 */
+	public TokenPair issue(User user, String sessionId) {
 		return new TokenPair(
-				encode(user, TYPE_ACCESS, properties.getJwt().getAccessTokenSeconds()),
-				encode(user, TYPE_REFRESH, properties.getJwt().getRefreshTokenSeconds()),
+				encode(user, TYPE_ACCESS, properties.getJwt().getAccessTokenSeconds(), sessionId),
+				encode(user, TYPE_REFRESH, properties.getJwt().getRefreshTokenSeconds(), sessionId),
 				properties.getJwt().getAccessTokenSeconds());
 	}
 
-	private String encode(User user, String type, long ttlSeconds) {
+	/** A short-lived token proving a password was accepted, pending a 2FA code. */
+	public String issueMfaChallenge(User user) {
 		Instant now = Instant.now();
 		JwtClaimsSet claims = JwtClaimsSet.builder()
+				.issuer(properties.getBaseUrl())
+				.subject(user.getId())
+				.issuedAt(now)
+				.expiresAt(now.plusSeconds(300))
+				.claim(CLAIM_TYPE, TYPE_MFA)
+				.build();
+		return encoder.encode(JwtEncoderParameters.from(
+				JwsHeader.with(MacAlgorithm.HS512).build(), claims)).getTokenValue();
+	}
+
+	private String encode(User user, String type, long ttlSeconds, String sessionId) {
+		Instant now = Instant.now();
+		JwtClaimsSet.Builder claims = JwtClaimsSet.builder()
 				.issuer(properties.getBaseUrl())
 				.subject(user.getId())
 				.issuedAt(now)
 				.expiresAt(now.plusSeconds(ttlSeconds))
 				.claim(CLAIM_TYPE, type)
 				.claim("username", user.getUsername())
-				.claim(CLAIM_ROLES, user.getRoles().stream().map(Role::name).collect(Collectors.toList()))
-				.build();
+				.claim(CLAIM_ROLES, user.getRoles().stream().map(Role::name).collect(Collectors.toList()));
+		if (sessionId != null) claims.claim(CLAIM_SID, sessionId);
 		JwsHeader header = JwsHeader.with(MacAlgorithm.HS512).build();
-		return encoder.encode(JwtEncoderParameters.from(header, claims)).getTokenValue();
+		return encoder.encode(JwtEncoderParameters.from(header, claims.build())).getTokenValue();
 	}
 
 	public static boolean isRefreshToken(Jwt jwt) {
 		return TYPE_REFRESH.equals(jwt.getClaimAsString(CLAIM_TYPE));
+	}
+
+	public static boolean isMfaToken(Jwt jwt) {
+		return TYPE_MFA.equals(jwt.getClaimAsString(CLAIM_TYPE));
+	}
+
+	public static String sessionId(Jwt jwt) {
+		return jwt.getClaimAsString(CLAIM_SID);
 	}
 }

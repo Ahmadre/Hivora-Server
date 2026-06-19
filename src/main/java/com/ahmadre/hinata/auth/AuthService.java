@@ -2,6 +2,10 @@ package com.ahmadre.hinata.auth;
 
 import com.ahmadre.hinata.auth.sso.LdapAuthenticator;
 import com.ahmadre.hinata.common.ApiException;
+import com.ahmadre.hinata.me.RecoveryCodeService;
+import com.ahmadre.hinata.me.RefreshSession;
+import com.ahmadre.hinata.me.SessionService;
+import com.ahmadre.hinata.me.TotpService;
 import com.ahmadre.hinata.setup.SettingsService;
 import com.ahmadre.hinata.user.User;
 import com.ahmadre.hinata.user.UserRepository;
@@ -23,12 +27,27 @@ public class AuthService {
 	private final LoginAttemptService attempts;
 	private final SettingsService settings;
 	private final LdapAuthenticator ldap;
+	private final SessionService sessions;
+	private final TotpService totp;
+	private final RecoveryCodeService recoveryCodes;
+	private final org.springframework.security.oauth2.jwt.JwtDecoder jwtDecoder;
 
 	public record LoginResult(User user, TokenService.TokenPair tokens) {
 	}
 
+	/**
+	 * Outcome of a credential check: either a full token pair, or — when the
+	 * account has 2FA enabled — a short-lived challenge the client must complete
+	 * with {@link #completeMfa} before a real session is minted.
+	 */
+	public record AuthOutcome(User user, TokenService.TokenPair tokens, String mfaToken) {
+		public boolean mfaRequired() {
+			return mfaToken != null;
+		}
+	}
+
 	/** Local credentials first, then LDAP fallback when enabled. */
-	public LoginResult login(String identifier, String password, String ip) {
+	public AuthOutcome login(String identifier, String password, String ip, String userAgent) {
 		attempts.assertNotBlocked(identifier, ip);
 
 		Optional<User> resolved = localLogin(identifier, password)
@@ -42,7 +61,39 @@ public class AuthService {
 			throw ApiException.forbidden("error.auth.accountDeactivated");
 		}
 		attempts.recordSuccess(identifier, ip);
-		return new LoginResult(user, tokens.issue(user));
+		if (user.isTotpEnabled()) {
+			return new AuthOutcome(user, null, tokens.issueMfaChallenge(user));
+		}
+		return new AuthOutcome(user, issueWithSession(user, ip, userAgent), null);
+	}
+
+	/** Completes a 2FA login: verifies the TOTP (or a recovery code) + mints a session. */
+	public LoginResult completeMfa(String mfaToken, String code, String ip, String userAgent) {
+		org.springframework.security.oauth2.jwt.Jwt jwt;
+		try {
+			jwt = jwtDecoder.decode(mfaToken);
+		}
+		catch (org.springframework.security.oauth2.jwt.JwtException ex) {
+			throw ApiException.unauthorized("error.auth.invalidMfaToken");
+		}
+		if (!TokenService.isMfaToken(jwt)) {
+			throw ApiException.unauthorized("error.auth.invalidMfaToken");
+		}
+		User user = users.findById(jwt.getSubject())
+				.filter(User::isActive)
+				.orElseThrow(() -> ApiException.unauthorized("error.auth.unknownUser"));
+		boolean ok = totp.verify(user.getTotpSecret(), code)
+				|| recoveryCodes.consume(user, code);
+		if (!ok) {
+			throw ApiException.unauthorized("error.auth.invalidTwoFactorCode");
+		}
+		return new LoginResult(user, issueWithSession(user, ip, userAgent));
+	}
+
+	/** Opens a tracked session and issues tokens carrying its id. */
+	public TokenService.TokenPair issueWithSession(User user, String ip, String userAgent) {
+		RefreshSession session = sessions.start(user, ip, userAgent);
+		return tokens.issue(user, session.getId());
 	}
 
 	private Optional<User> localLogin(String identifier, String password) {
@@ -58,9 +109,22 @@ public class AuthService {
 						ldapUser.email(), ldapUser.displayName(), User.Origin.LDAP));
 	}
 
-	public TokenService.TokenPair refresh(User user) {
+	/**
+	 * Rotates a token pair. When the refresh token carries a {@code sid}, the
+	 * session must still exist (i.e. not have been revoked from another device);
+	 * its last-active timestamp is bumped. Session-less (legacy) tokens are
+	 * grandfathered so an in-flight client isn't logged out by a deploy.
+	 */
+	public TokenService.TokenPair refresh(User user, String sessionId) {
 		if (!user.isActive()) {
 			throw ApiException.forbidden("error.auth.accountDeactivated");
+		}
+		if (sessionId != null) {
+			if (!sessions.isActive(sessionId)) {
+				throw ApiException.unauthorized("error.auth.sessionRevoked");
+			}
+			sessions.touch(sessionId);
+			return tokens.issue(user, sessionId);
 		}
 		return tokens.issue(user);
 	}

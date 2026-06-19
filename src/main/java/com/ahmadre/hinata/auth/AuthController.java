@@ -45,8 +45,12 @@ public class AuthController {
 	public record ChangePasswordRequest(@NotBlank String currentPassword, @NotBlank String newPassword) {
 	}
 
-	public record TokenResponse(String accessToken, String refreshToken, long expiresIn,
-			UserResponse user) {
+	public record TwoFactorRequest(@NotBlank String mfaToken, @NotBlank String code) {
+	}
+
+	/** Either a token pair (no 2FA) or a challenge prompting for a TOTP code. */
+	public record LoginResponse(boolean mfaRequired, String mfaToken, String accessToken,
+			String refreshToken, Long expiresIn, UserResponse user) {
 	}
 
 	public record UserResponse(String id, String email, String username, String displayName,
@@ -65,11 +69,24 @@ public class AuthController {
 	@ApiResponse(responseCode = "401", description = "Bad credentials or account locked")
 	@SecurityRequirements
 	@PostMapping("/login")
-	public TokenResponse login(@RequestBody @jakarta.validation.Valid LoginRequest request,
+	public LoginResponse login(@RequestBody @jakarta.validation.Valid LoginRequest request,
 			HttpServletRequest http) {
-		AuthService.LoginResult result = authService.login(
-				request.identifier().trim(), request.password(), clientIpResolver.resolve(http));
-		return toResponse(result.user(), result.tokens());
+		AuthService.AuthOutcome outcome = authService.login(request.identifier().trim(),
+				request.password(), clientIpResolver.resolve(http), http.getHeader("User-Agent"));
+		if (outcome.mfaRequired()) {
+			return new LoginResponse(true, outcome.mfaToken(), null, null, null, null);
+		}
+		return toLoginResponse(outcome.user(), outcome.tokens());
+	}
+
+	@Operation(summary = "Complete a 2FA login challenge with a TOTP / recovery code")
+	@SecurityRequirements
+	@PostMapping("/2fa")
+	public LoginResponse twoFactor(@RequestBody @jakarta.validation.Valid TwoFactorRequest request,
+			HttpServletRequest http) {
+		AuthService.LoginResult result = authService.completeMfa(request.mfaToken(),
+				request.code().trim(), clientIpResolver.resolve(http), http.getHeader("User-Agent"));
+		return toLoginResponse(result.user(), result.tokens());
 	}
 
 	@Operation(summary = "Exchange a refresh token for a new token pair")
@@ -77,7 +94,7 @@ public class AuthController {
 	@ApiResponse(responseCode = "401", description = "Invalid or expired refresh token")
 	@SecurityRequirements
 	@PostMapping("/refresh")
-	public TokenResponse refresh(@RequestBody @jakarta.validation.Valid RefreshRequest request) {
+	public LoginResponse refresh(@RequestBody @jakarta.validation.Valid RefreshRequest request) {
 		Jwt jwt;
 		try {
 			jwt = jwtDecoder.decode(request.refreshToken());
@@ -90,7 +107,7 @@ public class AuthController {
 		}
 		User user = users.findById(jwt.getSubject())
 				.orElseThrow(() -> ApiException.unauthorized("error.auth.unknownUser"));
-		return toResponse(user, authService.refresh(user));
+		return toLoginResponse(user, authService.refresh(user, TokenService.sessionId(jwt)));
 	}
 
 	@Operation(summary = "Return the currently authenticated user")
@@ -107,8 +124,8 @@ public class AuthController {
 		return Map.of("status", "ok");
 	}
 
-	private TokenResponse toResponse(User user, TokenService.TokenPair pair) {
-		return new TokenResponse(pair.accessToken(), pair.refreshToken(), pair.expiresInSeconds(),
-				UserResponse.from(user));
+	private LoginResponse toLoginResponse(User user, TokenService.TokenPair pair) {
+		return new LoginResponse(false, null, pair.accessToken(), pair.refreshToken(),
+				pair.expiresInSeconds(), UserResponse.from(user));
 	}
 }

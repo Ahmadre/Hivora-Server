@@ -29,4 +29,13 @@ public class CurrentUser {
 	public String requireId() {
 		return require().getId();
 	}
+
+	/** The session id ({@code sid}) of the calling access token, or null (legacy token). */
+	public String currentSessionId() {
+		Authentication authentication = SecurityContextHolder.getContext().getAuthentication();
+		if (authentication instanceof JwtAuthenticationToken jwt) {
+			return com.ahmadre.hinata.auth.TokenService.sessionId(jwt.getToken());
+		}
+		return null;
+	}
 }
