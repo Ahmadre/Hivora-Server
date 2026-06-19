@@ -16,6 +16,11 @@ hinata:
       key-store-password: ${HINATA_MONGO_TLS_KEYSTORE_PASSWORD:changeit}
       trust-store: ${HINATA_MONGO_TLS_TRUSTSTORE:deploy/x509/dev/truststore.p12}
       trust-store-password: ${HINATA_MONGO_TLS_TRUSTSTORE_PASSWORD:changeit}
+  # Populate a realistic English demo workspace on boot (idempotent — skips once
+  # any project exists). Reuse it for clicking through the app and for capturing
+  # screenshots. Login after seeding: rebar / hinata-demo-2026
+  demo:
+    seed: ${HINATA_DEMO_SEED:false}
 
 # Full API docs (Scalar UI) are convenient in dev.
 springdoc:
