@@ -1,5 +1,7 @@
 package com.ahmadre.hinata.auth;
 
+import com.ahmadre.hinata.audit.AuditAction;
+import com.ahmadre.hinata.audit.AuditService;
 import com.ahmadre.hinata.auth.sso.LdapAuthenticator;
 import com.ahmadre.hinata.common.ApiException;
 import com.ahmadre.hinata.me.RecoveryCodeService;
@@ -30,6 +32,7 @@ public class AuthService {
 	private final SessionService sessions;
 	private final TotpService totp;
 	private final RecoveryCodeService recoveryCodes;
+	private final AuditService audit;
 	private final org.springframework.security.oauth2.jwt.JwtDecoder jwtDecoder;
 
 	public record LoginResult(User user, TokenService.TokenPair tokens) {
@@ -48,23 +51,38 @@ public class AuthService {
 
 	/** Local credentials first, then LDAP fallback when enabled. */
 	public AuthOutcome login(String identifier, String password, String ip, String userAgent) {
-		attempts.assertNotBlocked(identifier, ip);
+		try {
+			attempts.assertNotBlocked(identifier, ip);
+		}
+		catch (ApiException blocked) {
+			audit.event(AuditAction.LOGIN_BLOCKED).actor(null, identifier)
+					.ip(ip).userAgent(userAgent).log();
+			throw blocked;
+		}
 
 		Optional<User> resolved = localLogin(identifier, password)
 				.or(() -> ldapLogin(identifier, password));
 
 		User user = resolved.orElseThrow(() -> {
 			attempts.recordFailure(identifier, ip);
+			audit.event(AuditAction.LOGIN_FAILURE).actor(null, identifier)
+					.ip(ip).userAgent(userAgent).meta("reason", "invalidCredentials").log();
 			return ApiException.unauthorized("error.auth.invalidCredentials");
 		});
 		if (!user.isActive()) {
+			audit.event(AuditAction.LOGIN_FAILURE).actor(user)
+					.ip(ip).userAgent(userAgent).meta("reason", "accountDeactivated").log();
 			throw ApiException.forbidden("error.auth.accountDeactivated");
 		}
 		attempts.recordSuccess(identifier, ip);
 		if (user.isTotpEnabled()) {
+			// Credentials are valid but the session is only minted once the 2FA
+			// challenge is completed — LOGIN_SUCCESS is recorded there.
 			return new AuthOutcome(user, null, tokens.issueMfaChallenge(user));
 		}
-		return new AuthOutcome(user, issueWithSession(user, ip, userAgent), null);
+		AuthOutcome outcome = new AuthOutcome(user, issueWithSession(user, ip, userAgent), null);
+		audit.event(AuditAction.LOGIN_SUCCESS).actor(user).ip(ip).userAgent(userAgent).log();
+		return outcome;
 	}
 
 	/** Completes a 2FA login: verifies the TOTP (or a recovery code) + mints a session. */
@@ -85,9 +103,13 @@ public class AuthService {
 		boolean ok = totp.verify(user.getTotpSecret(), code)
 				|| recoveryCodes.consume(user, code);
 		if (!ok) {
+			audit.event(AuditAction.MFA_FAILURE).actor(user).ip(ip).userAgent(userAgent).log();
 			throw ApiException.unauthorized("error.auth.invalidTwoFactorCode");
 		}
-		return new LoginResult(user, issueWithSession(user, ip, userAgent));
+		LoginResult result = new LoginResult(user, issueWithSession(user, ip, userAgent));
+		audit.event(AuditAction.LOGIN_SUCCESS).actor(user).ip(ip).userAgent(userAgent)
+				.meta("mfa", "totp").log();
+		return result;
 	}
 
 	/** Opens a tracked session and issues tokens carrying its id. */

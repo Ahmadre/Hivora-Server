@@ -1,5 +1,7 @@
 package com.ahmadre.hinata.me;
 
+import com.ahmadre.hinata.audit.AuditAction;
+import com.ahmadre.hinata.audit.AuditService;
 import com.ahmadre.hinata.common.ApiException;
 import com.ahmadre.hinata.config.HinataProperties;
 import com.ahmadre.hinata.project.Project;
@@ -48,6 +50,7 @@ public class MeService {
 	private final TeamRepository teams;
 	private final ProjectService projects;
 	private final com.ahmadre.hinata.notification.NotificationService notifications;
+	private final AuditService audit;
 
 	// --- Profile --------------------------------------------------------------
 
@@ -80,6 +83,8 @@ public class MeService {
 		String confirmUrl = apiBase() + "/api/v1/me/email-change/confirm?token="
 				+ user.getId() + "." + secret;
 		accountMail.sendEmailChangeVerification(user, normalized, confirmUrl);
+		audit.event(AuditAction.EMAIL_CHANGE_REQUESTED).actor(user)
+				.meta("newEmail", normalized).log();
 	}
 
 	/** Confirms a pending email change from the link token. Returns the user. */
@@ -103,6 +108,7 @@ public class MeService {
 				de(user) ? "E-Mail-Adresse geändert" : "Email address changed",
 				de(user) ? "Deine Anmelde-E-Mail wurde aktualisiert."
 						: "Your sign-in email was updated.");
+		audit.event(AuditAction.EMAIL_CHANGED).actor(user).meta("email", user.getEmail()).log();
 		return user;
 	}
 
@@ -118,6 +124,7 @@ public class MeService {
 		users.save(user);
 		// Deep link straight to the in-app reset page (Flutter), no backend form.
 		accountMail.sendPasswordReset(user, properties.resetLink(user.getId() + "." + secret));
+		audit.event(AuditAction.PASSWORD_RESET_REQUESTED).actor(user).log();
 	}
 
 	public void confirmPasswordReset(String token, String newPassword) {
@@ -133,6 +140,7 @@ public class MeService {
 		accountMail.sendSecurityAlert(user,
 				de(user) ? "Passwort geändert" : "Password changed",
 				de(user) ? "Dein Passwort wurde zurückgesetzt." : "Your password was reset.");
+		audit.event(AuditAction.PASSWORD_RESET_COMPLETED).actor(user).log();
 	}
 
 	// --- Sessions -------------------------------------------------------------
@@ -146,10 +154,12 @@ public class MeService {
 			throw ApiException.badRequest("error.me.cannotRevokeCurrentSession");
 		}
 		sessions.revoke(userId, sessionId);
+		audit.event(AuditAction.SESSION_REVOKED).actor(userId, null).meta("scope", "single").log();
 	}
 
 	public void revokeOtherSessions(String userId, String currentSessionId) {
 		sessions.revokeOthers(userId, currentSessionId);
+		audit.event(AuditAction.SESSION_REVOKED).actor(userId, null).meta("scope", "others").log();
 	}
 
 	// --- Notification preferences --------------------------------------------
@@ -200,6 +210,7 @@ public class MeService {
 		accountMail.sendSecurityAlert(user,
 				de(user) ? "Zwei-Faktor-Authentifizierung aktiviert" : "Two-factor authentication enabled",
 				de(user) ? "2FA wurde für dein Konto aktiviert." : "2FA was enabled on your account.");
+		audit.event(AuditAction.TWO_FACTOR_ENABLED).actor(user).log();
 		return plain;
 	}
 
@@ -211,6 +222,7 @@ public class MeService {
 		List<String> plain = totp.newRecoveryCodes();
 		user.setRecoveryCodeHashes(recoveryCodes.hashAll(plain));
 		users.save(user);
+		audit.event(AuditAction.RECOVERY_CODES_REGENERATED).actor(user).log();
 		return plain;
 	}
 
@@ -228,6 +240,7 @@ public class MeService {
 		accountMail.sendSecurityAlert(user,
 				de(user) ? "Zwei-Faktor-Authentifizierung deaktiviert" : "Two-factor authentication disabled",
 				de(user) ? "2FA wurde für dein Konto deaktiviert." : "2FA was disabled on your account.");
+		audit.event(AuditAction.TWO_FACTOR_DISABLED).actor(user).log();
 	}
 
 	// --- Access overview ------------------------------------------------------
@@ -284,6 +297,7 @@ public class MeService {
 		// serves the machine-readable export; the mail links the user back to it.
 		String downloadUrl = apiBase() + "/api/v1/me/export";
 		accountMail.sendDataReportReady(user, downloadUrl);
+		audit.event(AuditAction.DATA_EXPORT_REQUESTED).actor(user).log();
 		log.info("Data report prepared for user {}", user.getId());
 	}
 
@@ -296,6 +310,8 @@ public class MeService {
 		sessions.revokeAll(user.getId());
 		// Mail the user before their account (and its notifications) are removed.
 		notifications.notifyAccountDeleted(user);
+		audit.event(AuditAction.ACCOUNT_DELETED).actor(user)
+				.meta("self", "true").meta("email", user.getEmail()).log();
 		userService.delete(user);
 	}
 

@@ -11,6 +11,8 @@ import com.ahmadre.hinata.user.Role;
 import com.ahmadre.hinata.user.User;
 import com.ahmadre.hinata.user.UserRepository;
 import com.ahmadre.hinata.user.UserService;
+import com.ahmadre.hinata.audit.AuditAction;
+import com.ahmadre.hinata.audit.AuditService;
 import lombok.RequiredArgsConstructor;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
@@ -48,6 +50,7 @@ public class AdminUserService {
 	private final CurrentUser currentUser;
 	private final PasswordEncoder passwordEncoder;
 	private final HinataProperties properties;
+	private final AuditService audit;
 
 	// --- Read: filter + sort + paginate --------------------------------------
 
@@ -110,6 +113,17 @@ public class AdminUserService {
 		return "asc".equalsIgnoreCase(dir) ? cmp : cmp.reversed();
 	}
 
+	// --- Lifecycle: create ---------------------------------------------------
+
+	/** Creates a local account directly (admin "add user"), then audits it. */
+	public User createLocal(String email, String username, String displayName, String password,
+			Set<Role> roles) {
+		User created = userService.createLocal(email, username, displayName, password, roles);
+		audit.event(AuditAction.USER_CREATED).actor(actingAdmin()).target(created)
+				.meta("role", created.isAdmin() ? "ADMIN" : "MEMBER").log();
+		return created;
+	}
+
 	// --- Lifecycle: invite ---------------------------------------------------
 
 	public int invite(List<String> emails, boolean admin, String message) {
@@ -125,6 +139,8 @@ public class AdminUserService {
 			User invited = userService.createInvited(email, deriveName(email), roles, inviterId,
 					passwordEncoder.encode(secret), now, now.plus(INVITE_TTL_DAYS, ChronoUnit.DAYS));
 			adminMail.sendInvite(invited, inviteUrl(invited.getId(), secret), message, inviterName);
+			audit.event(AuditAction.USER_INVITED).actor(inviterId, inviterName)
+					.target(invited).meta("role", admin ? "ADMIN" : "MEMBER").log();
 			sent++;
 		}
 		return sent;
@@ -166,6 +182,8 @@ public class AdminUserService {
 			if (saved.isActive() != wasActive) {
 				if (saved.isActive()) notifications.notifyAccountActivated(saved);
 				else notifications.notifyAccountDeactivated(saved);
+				audit.event(saved.isActive() ? AuditAction.USER_ACTIVATED : AuditAction.USER_DEACTIVATED)
+						.actor(actingAdmin()).target(saved).log();
 			}
 		}
 	}
@@ -180,6 +198,9 @@ public class AdminUserService {
 			u.setRoles(admin ? Set.of(Role.ADMIN, Role.MEMBER) : Set.of(Role.MEMBER));
 			User saved = users.save(u);
 			notifications.notifyRolesChanged(saved);
+			audit.event(AuditAction.USER_ROLE_CHANGED).actor(actingAdmin()).target(saved)
+					.meta("from", wasAdmin ? "ADMIN" : "USER")
+					.meta("to", admin ? "ADMIN" : "USER").log();
 		}
 	}
 
@@ -195,12 +216,15 @@ public class AdminUserService {
 			u.setPasswordResetExpiresAt(Instant.now().plus(RESET_TTL_MINUTES, ChronoUnit.MINUTES));
 			users.save(u);
 			accountMail.sendPasswordReset(u, properties.resetLink(u.getId() + "." + secret));
+			audit.event(AuditAction.USER_PASSWORD_RESET_SENT).actor(actingAdmin()).target(u).log();
 		}
 	}
 
 	public void revokeSessions(List<String> ids) {
 		for (String id : ids) {
-			sessions.revokeAll(userService.get(id).getId());
+			User u = userService.get(id);
+			sessions.revokeAll(u.getId());
+			audit.event(AuditAction.USER_SESSIONS_REVOKED).actor(actingAdmin()).target(u).log();
 		}
 	}
 
@@ -229,8 +253,15 @@ public class AdminUserService {
 			}
 			if (u.isAdmin()) requireAnotherActiveAdmin(u, "error.user.cannotDeleteLastAdmin");
 			notifications.notifyAccountDeleted(u);
+			audit.event(AuditAction.USER_DELETED).actor(actingAdmin()).target(u)
+					.meta("email", u.getEmail()).log();
 			userService.delete(u);
 		}
+	}
+
+	/** The administrator performing the current action, for audit attribution. */
+	private User actingAdmin() {
+		return users.findById(currentUser.requireId()).orElse(null);
 	}
 
 	// --- Mapping / helpers ---------------------------------------------------

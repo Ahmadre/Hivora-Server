@@ -24,6 +24,7 @@ public class UserService {
 	private final UserRepository users;
 	private final PasswordEncoder passwordEncoder;
 	private final MongoTemplate mongo;
+	private final com.ahmadre.hinata.audit.AuditService audit;
 
 	public User get(String id) {
 		return users.findById(id).orElseThrow(() -> ApiException.notFound("user"));
@@ -107,6 +108,7 @@ public class UserService {
 		validatePassword(newPassword);
 		user.setPasswordHash(passwordEncoder.encode(newPassword));
 		users.save(user);
+		audit.event(com.ahmadre.hinata.audit.AuditAction.PASSWORD_CHANGED).actor(user).log();
 	}
 
 	public void validatePassword(String rawPassword) {

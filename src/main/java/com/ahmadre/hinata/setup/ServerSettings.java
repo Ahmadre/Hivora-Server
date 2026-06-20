@@ -40,6 +40,7 @@ public class ServerSettings {
 	private Cas cas = new Cas();
 	private EmailIngest emailIngest = new EmailIngest();
 	private Push push = new Push();
+	private Audit audit = new Audit();
 
 	@LastModifiedDate
 	private Instant updatedAt;
@@ -185,5 +186,22 @@ public class ServerSettings {
 		private String fcmProjectId;
 		@JsonProperty(access = JsonProperty.Access.WRITE_ONLY)
 		private String fcmServiceAccountJson;
+	}
+
+	/**
+	 * Security audit logging. {@code enabled} is the master switch — when off,
+	 * nothing is recorded regardless of {@code events}. {@code events} maps an
+	 * {@code AuditAction} name to whether that specific event is captured; a
+	 * missing key falls back to the action's built-in default, so newly added
+	 * event types are on by default until an admin opts out.
+	 */
+	@Data
+	public static class Audit {
+		/** Master on/off switch for all audit logging. */
+		private boolean enabled = true;
+		/** Per-event-type capture flags, keyed by {@code AuditAction} name. */
+		private Map<String, Boolean> events = new LinkedHashMap<>();
+		/** Days to keep audit records before the nightly retention sweep drops them. */
+		private int retentionDays = 365;
 	}
 }

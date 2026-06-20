@@ -35,6 +35,7 @@ public class SsoLoginSuccessHandler implements AuthenticationSuccessHandler {
 	private final HinataProperties properties;
 	private final com.ahmadre.hinata.me.SessionService sessions;
 	private final com.ahmadre.hinata.config.ClientIpResolver clientIpResolver;
+	private final com.ahmadre.hinata.audit.AuditService audit;
 
 	@Override
 	public void onAuthenticationSuccess(HttpServletRequest request, HttpServletResponse response,
@@ -43,6 +44,8 @@ public class SsoLoginSuccessHandler implements AuthenticationSuccessHandler {
 		com.ahmadre.hinata.me.RefreshSession session = sessions.start(user,
 				clientIpResolver.resolve(request), request.getHeader("User-Agent"));
 		TokenService.TokenPair pair = tokens.issue(user, session.getId());
+		audit.event(com.ahmadre.hinata.audit.AuditAction.SSO_LOGIN).actor(user)
+				.meta("provider", user.getOrigin().name()).log();
 		String query = "access_token=" + URLEncoder.encode(pair.accessToken(), StandardCharsets.UTF_8)
 				+ "&refresh_token=" + URLEncoder.encode(pair.refreshToken(), StandardCharsets.UTF_8);
 

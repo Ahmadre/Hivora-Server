@@ -2,6 +2,8 @@ package com.ahmadre.hinata.demo;
 
 import com.ahmadre.hinata.article.Article;
 import com.ahmadre.hinata.article.ArticleRepository;
+import com.ahmadre.hinata.audit.AuditAction;
+import com.ahmadre.hinata.audit.AuditLog;
 import com.ahmadre.hinata.board.AgileBoard;
 import com.ahmadre.hinata.board.AgileBoardRepository;
 import com.ahmadre.hinata.board.Sprint;
@@ -158,6 +160,9 @@ public class DemoSeeder {
 		// --- knowledge base (real articles, cross-linked to issues/people) --
 		seedKnowledge(core, dsgn, hin, inf, admin, tomas, lena, amara, mei, jonas);
 
+		// --- security audit log (real, back-dated events) ------------------
+		seedAuditLog(admin, tomas, lena, amara, mei, jonas);
+
 		log.info("[demo] done — {} users, {} projects, {} issues, {} articles. Login: admin / {}",
 				users.count(), projects.count(), issues.count(), articleRepo.count(), DEMO_PASSWORD);
 	}
@@ -168,6 +173,7 @@ public class DemoSeeder {
 	 * Safe because the bean is {@code @Profile("!prod")} — this never runs in prod.
 	 */
 	private void resetWorkspace() {
+		mongo.dropCollection(com.ahmadre.hinata.audit.AuditLog.class);
 		mongo.dropCollection(Article.class);
 		mongo.dropCollection(WorkItem.class);
 		mongo.dropCollection(Issue.class);
@@ -457,6 +463,81 @@ public class DemoSeeder {
 
 	private Instant daysAgo(int days) {
 		return LocalDate.now().minusDays(days).atTime(14, 30).toInstant(ZoneOffset.UTC);
+	}
+
+	// ---- security audit log ------------------------------------------------
+
+	/**
+	 * Seeds a realistic spread of security-audit records so the admin "Audit log"
+	 * surface renders real history out of the box. Written straight to Mongo and
+	 * back-dated (the live {@code AuditService} path is gated on request context),
+	 * mirroring exactly what the instrumented services would have recorded.
+	 */
+	private void seedAuditLog(User admin, User tomas, User lena, User amara, User mei, User jonas) {
+		// hoursAgo, action, severity?, outcome?, actor, target, ip, ua, meta…
+		auditEvent(2, AuditAction.LOGIN_SUCCESS, admin, null, "203.0.113.xx.xx",
+				"hinata app", "mfa", "totp");
+		auditEvent(3, AuditAction.SETTINGS_CHANGED, admin, null, "203.0.113.xx.xx",
+				"Chrome", "auditEnabled", "true");
+		auditEvent(6, AuditAction.LOGIN_FAILURE, null, null, "198.51.100.xx.xx",
+				"Firefox", "reason", "invalidCredentials").setActorLabel("tomas@hinata.dev");
+		auditEvent(6, AuditAction.LOGIN_FAILURE, null, null, "198.51.100.xx.xx",
+				"Firefox", "reason", "invalidCredentials").setActorLabel("tomas@hinata.dev");
+		auditEvent(7, AuditAction.LOGIN_BLOCKED, null, null, "198.51.100.xx.xx",
+				"Firefox", "reason", "tooManyAttempts").setActorLabel("tomas@hinata.dev");
+		auditEvent(11, AuditAction.LOGIN_SUCCESS, tomas, null, "192.0.2.xx.xx", "Chrome");
+		auditEvent(14, AuditAction.TWO_FACTOR_ENABLED, lena, null, "192.0.2.xx.xx", "Safari");
+		auditEvent(18, AuditAction.PASSWORD_CHANGED, amara, null, "192.0.2.xx.xx", "hinata app");
+		auditEvent(22, AuditAction.USER_ROLE_CHANGED, admin, tomas, "203.0.113.xx.xx",
+				"Chrome", "from", "USER", "to", "ADMIN");
+		auditEvent(24, AuditAction.USER_INVITED, admin, mei, "203.0.113.xx.xx",
+				"Chrome", "role", "MEMBER");
+		auditEvent(27, AuditAction.MFA_FAILURE, jonas, null, "192.0.2.xx.xx", "hinata app");
+		auditEvent(30, AuditAction.SESSION_REVOKED, jonas, null, "192.0.2.xx.xx",
+				"Safari", "scope", "others");
+		auditEvent(34, AuditAction.EMAIL_CHANGE_REQUESTED, amara, null, "192.0.2.xx.xx",
+				"hinata app", "newEmail", "amara.okafor@hinata.dev");
+		auditEvent(38, AuditAction.USER_DEACTIVATED, admin, mei, "203.0.113.xx.xx", "Chrome");
+		auditEvent(41, AuditAction.SSO_LOGIN, lena, null, "192.0.2.xx.xx",
+				"Chrome", "provider", "OIDC");
+		auditEvent(45, AuditAction.DATA_EXPORT_REQUESTED, jonas, null, "192.0.2.xx.xx", "hinata app");
+		log.info("[demo] seeded {} audit-log records", mongo.count(new Query(), AuditLog.class));
+	}
+
+	/**
+	 * Builds, persists and back-dates one {@link AuditLog} record. Trailing
+	 * {@code meta} varargs are key/value pairs. Returns the saved entry so the
+	 * caller can tweak it (e.g. set an anonymous actor label).
+	 */
+	private AuditLog auditEvent(int hoursAgo, AuditAction action, User actor, User target,
+			String ip, String userAgent, String... meta) {
+		Map<String, String> metadata = new LinkedHashMap<>();
+		for (int i = 0; i + 1 < meta.length; i += 2) {
+			metadata.put(meta[i], meta[i + 1]);
+		}
+		AuditLog.Outcome outcome = switch (action) {
+			case LOGIN_FAILURE, LOGIN_BLOCKED, MFA_FAILURE -> AuditLog.Outcome.FAILURE;
+			default -> AuditLog.Outcome.SUCCESS;
+		};
+		AuditLog entry = AuditLog.builder()
+				.action(action)
+				.category(action.category())
+				.severity(action.defaultSeverity())
+				.outcome(outcome)
+				.actorId(actor == null ? null : actor.getId())
+				.actorLabel(actor == null ? null : actor.getDisplayName())
+				.targetId(target == null ? null : target.getId())
+				.targetLabel(target == null ? null : target.getDisplayName())
+				.ip(ip)
+				.userAgent(userAgent)
+				.metadata(metadata.isEmpty() ? null : metadata)
+				.build();
+		AuditLog saved = mongo.save(entry);
+		Instant when = Instant.now().minus(hoursAgo, ChronoUnit.HOURS);
+		mongo.updateFirst(Query.query(Criteria.where("_id").is(saved.getId())),
+				new Update().set("timestamp", when), AuditLog.class);
+		saved.setTimestamp(when);
+		return saved;
 	}
 
 	/** Stagger start/due dates across ~3 weeks for the first dozen HIN issues,

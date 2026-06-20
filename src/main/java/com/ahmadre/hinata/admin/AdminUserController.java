@@ -2,7 +2,6 @@ package com.ahmadre.hinata.admin;
 
 import com.ahmadre.hinata.user.Role;
 import com.ahmadre.hinata.user.User;
-import com.ahmadre.hinata.user.UserService;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.Email;
@@ -34,7 +33,6 @@ import java.util.Set;
 public class AdminUserController {
 
 	private final AdminUserService service;
-	private final UserService userService;
 
 	// --- Read ----------------------------------------------------------------
 
@@ -65,7 +63,7 @@ public class AdminUserController {
 	@ResponseStatus(HttpStatus.CREATED)
 	public AdminUserResponse create(@RequestBody @Valid CreateUserRequest request) {
 		Set<Role> roles = request.admin() ? Set.of(Role.ADMIN, Role.MEMBER) : Set.of(Role.MEMBER);
-		User user = userService.createLocal(request.email(), request.username(),
+		User user = service.createLocal(request.email(), request.username(),
 				request.displayName(), request.password(), roles);
 		return service.toResponse(user);
 	}

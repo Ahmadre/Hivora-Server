@@ -1,5 +1,8 @@
 package com.ahmadre.hinata.setup;
 
+import com.ahmadre.hinata.audit.AuditAction;
+import com.ahmadre.hinata.audit.AuditService;
+import com.ahmadre.hinata.auth.CurrentUser;
 import com.ahmadre.hinata.config.HinataProperties;
 import lombok.RequiredArgsConstructor;
 import io.swagger.v3.oas.annotations.tags.Tag;
@@ -21,6 +24,8 @@ public class AdminSettingsController {
 
 	private final SettingsService settings;
 	private final HinataProperties properties;
+	private final AuditService audit;
+	private final CurrentUser currentUser;
 
 	@GetMapping
 	public ServerSettings get() {
@@ -59,6 +64,12 @@ public class AdminSettingsController {
 			updated.setOrganizationName(current.getOrganizationName());
 		}
 		keepSecretsIfBlank(updated, current);
+		// Recorded before the save so that disabling audit logging itself is still
+		// captured (the check reads the pre-save, still-enabled settings).
+		audit.event(AuditAction.SETTINGS_CHANGED)
+				.actor(currentUser.require())
+				.meta("auditEnabled", String.valueOf(updated.getAudit().isEnabled()))
+				.log();
 		return settings.save(updated);
 	}
 
