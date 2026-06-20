@@ -116,7 +116,9 @@ public class MeService {
 		user.setPasswordResetTokenHash(passwordEncoder.encode(secret));
 		user.setPasswordResetExpiresAt(Instant.now().plusSeconds(30L * 60));
 		users.save(user);
-		String resetUrl = apiBase() + "/api/v1/me/password-reset/confirm?token="
+		// Hand off to the app via the deep-link landing page (auth package) so the
+		// user resets in-app rather than a bare browser form.
+		String resetUrl = apiBase() + "/api/v1/auth/reset/confirm?token="
 				+ user.getId() + "." + secret;
 		accountMail.sendPasswordReset(user, resetUrl);
 	}

@@ -195,7 +195,7 @@ public class AdminUserService {
 			u.setPasswordResetExpiresAt(Instant.now().plus(RESET_TTL_MINUTES, ChronoUnit.MINUTES));
 			users.save(u);
 			String resetUrl = properties.getBaseUrl()
-					+ "/api/v1/me/password-reset/confirm?token=" + u.getId() + "." + secret;
+					+ "/api/v1/auth/reset/confirm?token=" + u.getId() + "." + secret;
 			accountMail.sendPasswordReset(u, resetUrl);
 		}
 	}
