@@ -1,5 +1,6 @@
 package com.ahmadre.hinata.admin;
 
+import com.ahmadre.hinata.audit.AuditService;
 import com.ahmadre.hinata.auth.CurrentUser;
 import com.ahmadre.hinata.common.ApiException;
 import com.ahmadre.hinata.config.HinataProperties;
@@ -22,6 +23,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.Mockito.RETURNS_SELF;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
@@ -50,8 +52,13 @@ class AdminUserServiceTest {
 		when(users.save(any(User.class))).thenAnswer(i -> i.getArgument(0));
 		when(sessions.list(anyString())).thenReturn(List.of());
 		when(currentUser.requireId()).thenReturn("me");
+		// AuditService exposes a fluent builder (event(...).actor(...).target(...).log());
+		// RETURNS_SELF makes the mocked Entry return itself for every chained call.
+		AuditService audit = mock(AuditService.class);
+		when(audit.event(any())).thenReturn(mock(AuditService.Entry.class, RETURNS_SELF));
 		service = new AdminUserService(users, userService, sessions, notifications, adminMail,
-				accountMail, currentUser, new BCryptPasswordEncoder(4), new HinataProperties());
+				accountMail, currentUser, new BCryptPasswordEncoder(4), new HinataProperties(),
+				audit);
 	}
 
 	private User user(String id, Role role, boolean active, User.Origin origin) {

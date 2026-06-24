@@ -1,5 +1,6 @@
 package com.ahmadre.hinata.user;
 
+import com.ahmadre.hinata.audit.AuditService;
 import com.ahmadre.hinata.common.ApiException;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -25,14 +26,15 @@ class UserServiceTest {
 	void setUp() {
 		users = mock(UserRepository.class);
 		when(users.save(any(User.class))).thenAnswer(invocation -> invocation.getArgument(0));
-		service = new UserService(users, new BCryptPasswordEncoder(4), mock(MongoTemplate.class));
+		service = new UserService(users, new BCryptPasswordEncoder(4), mock(MongoTemplate.class),
+				mock(AuditService.class));
 	}
 
 	@Test
 	void rejectsShortPasswords() {
 		assertThatThrownBy(() -> service.createLocal("a@b.de", "ada", "Ada", "short", Set.of(Role.MEMBER)))
 				.isInstanceOf(ApiException.class)
-				.hasMessageContaining("at least 10 characters");
+				.hasMessageContaining("passwordTooShort");
 	}
 
 	@Test
@@ -41,7 +43,7 @@ class UserServiceTest {
 		assertThatThrownBy(() -> service.createLocal("a@b.de", "ada", "Ada", "long-enough-pass",
 				Set.of(Role.MEMBER)))
 				.isInstanceOf(ApiException.class)
-				.hasMessageContaining("E-mail already in use");
+				.hasMessageContaining("emailInUse");
 	}
 
 	@Test
