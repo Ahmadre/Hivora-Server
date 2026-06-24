@@ -157,6 +157,12 @@ public class IssueController {
 		return issueService.activityOf(id, currentUser.require());
 	}
 
+	/** Breadcrumb ancestors + direct children for the issue hierarchy view. */
+	@GetMapping("/{id}/hierarchy")
+	public IssueService.Hierarchy hierarchy(@PathVariable String id) {
+		return issueService.hierarchyOf(id, currentUser.require());
+	}
+
 	@GetMapping("/{id}/comments")
 	public List<IssueComment> comments(@PathVariable String id) {
 		return issueService.commentsOf(id, currentUser.require());

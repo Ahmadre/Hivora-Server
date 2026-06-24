@@ -13,4 +13,6 @@ public interface ArticleRepository extends MongoRepository<Article, String> {
 	List<Article> findAllByOrderBySortOrderAsc();
 
 	List<Article> findByParentId(String parentId);
+
+	List<Article> findBySpace(String space);
 }

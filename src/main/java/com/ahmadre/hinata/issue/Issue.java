@@ -21,7 +21,24 @@ import java.util.List;
 @CompoundIndex(name = "project_number", def = "{'projectId': 1, 'numberInProject': 1}", unique = true)
 public class Issue {
 
-	public enum Type { TASK, BUG, FEATURE, EPIC }
+	public enum Type {
+		TASK, BUG, FEATURE, STORY, EPIC, SUBTASK;
+
+		/** The top of the hierarchy: holds standard issues, never has a parent. */
+		public boolean isEpic() {
+			return this == EPIC;
+		}
+
+		/** The leaf level: lives under a standard issue, never holds children. */
+		public boolean isSubtask() {
+			return this == SUBTASK;
+		}
+
+		/** Story / Task / Bug / Feature — may sit under an epic and hold sub-tasks. */
+		public boolean isStandard() {
+			return !isEpic() && !isSubtask();
+		}
+	}
 
 	public enum Priority { SHOWSTOPPER, CRITICAL, MAJOR, NORMAL, MINOR }
 

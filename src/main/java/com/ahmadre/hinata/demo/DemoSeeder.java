@@ -16,6 +16,8 @@ import com.ahmadre.hinata.project.Project;
 import com.ahmadre.hinata.project.ProjectRepository;
 import com.ahmadre.hinata.setup.ServerSettings;
 import com.ahmadre.hinata.setup.SettingsService;
+import com.ahmadre.hinata.space.Space;
+import com.ahmadre.hinata.space.SpaceRepository;
 import com.ahmadre.hinata.team.ProjectAccess;
 import com.ahmadre.hinata.team.Team;
 import com.ahmadre.hinata.team.TeamMembership;
@@ -91,6 +93,7 @@ public class DemoSeeder {
 	private final WorkItemRepository workItems;
 	private final TeamRepository teams;
 	private final ArticleRepository articleRepo;
+	private final SpaceRepository spaceRepo;
 	private final MongoTemplate mongo;
 
 	private final Map<String, Long> counters = new LinkedHashMap<>();
@@ -174,6 +177,7 @@ public class DemoSeeder {
 	 */
 	private void resetWorkspace() {
 		mongo.dropCollection(com.ahmadre.hinata.audit.AuditLog.class);
+		mongo.dropCollection(Space.class);
 		mongo.dropCollection(Article.class);
 		mongo.dropCollection(WorkItem.class);
 		mongo.dropCollection(Issue.class);
@@ -308,43 +312,55 @@ public class DemoSeeder {
 	/** Curated HIN backlog: the dense board/dashboard/sprint/report surface. */
 	private void seedHinIssues(Project p, AgileBoard board, Sprint s22, Sprint s23, Sprint s24,
 			User admin, User tomas, User lena, User amara, User mei, User jonas) {
+		// --- epics: the strategic buckets the work below rolls up into ------
+		Issue epicBoard = epic(p, "Agile board redesign v2", lena, 9);
+		Issue epicDeploy = epic(p, "Self-host & deployment hardening", jonas, 8);
+		Issue epicSearch = epic(p, "Search & navigation", admin, 7);
+
 		// --- active sprint (Sprint 24): in-flight work ---------------------
-		issue(p, "Redesign the agile board with calmer column rhythm", Issue.Type.FEATURE,
-				Issue.Priority.MAJOR, "In Progress", lena, s24, 5, 240, 95,
-				List.of("design"), null, 4);
+		Issue boardRedesign = issue(p, "Redesign the agile board with calmer column rhythm",
+				Issue.Type.STORY, Issue.Priority.MAJOR, "In Progress", lena, s24, 5, 240, 95,
+				List.of("design"), null, 4, epicBoard.getId());
 		issue(p, "Card drag introduces 120ms jank on large sprints", Issue.Type.BUG,
 				Issue.Priority.CRITICAL, "In Progress", amara, s24, 3, 180, 130,
-				List.of("performance"), null, 1);
-		issue(p, "Issue detail: inline edit for estimate & spent", Issue.Type.FEATURE,
+				List.of("performance"), null, 1, epicBoard.getId());
+		issue(p, "Issue detail: inline edit for estimate & spent", Issue.Type.STORY,
 				Issue.Priority.NORMAL, "In Progress", admin, s24, 3, 150, 70,
 				List.of(), null, 7);
 		issue(p, "Adaptive icon clips on Android 13 themed mode", Issue.Type.BUG,
 				Issue.Priority.MAJOR, "Open", mei, s24, 2, 90, 0,
 				List.of(), -1, 0);
-		issue(p, "Blue-green deploy script for the self-host bundle", Issue.Type.TASK,
-				Issue.Priority.NORMAL, "Open", jonas, s24, 5, 300, 0,
-				List.of("security"), null, 0);
+		Issue deployScript = issue(p, "Blue-green deploy script for the self-host bundle",
+				Issue.Type.TASK, Issue.Priority.NORMAL, "Open", jonas, s24, 5, 300, 0,
+				List.of("security"), null, 0, epicDeploy.getId());
 		issue(p, "Sprint header shows wrong remaining capacity", Issue.Type.BUG,
 				Issue.Priority.NORMAL, "In Review", tomas, s24, 2, 60, 55,
-				List.of(), null, 0);
+				List.of(), null, 0, epicBoard.getId());
 		issue(p, "People filter on board ignores unassigned column", Issue.Type.BUG,
 				Issue.Priority.MINOR, "In Review", amara, s24, 1, 45, 40,
-				List.of(), null, 0);
+				List.of(), null, 0, epicBoard.getId());
 		issue(p, "Backlog ordering should persist across reloads", Issue.Type.TASK,
 				Issue.Priority.NORMAL, "Open", admin, s24, 2, 90, 0,
 				List.of(), -2, 0);
-		issue(p, "Add story-point capacity bar to sprint planning", Issue.Type.FEATURE,
+		issue(p, "Add story-point capacity bar to sprint planning", Issue.Type.STORY,
 				Issue.Priority.NORMAL, "Open", lena, s24, 3, 120, 0,
-				List.of("design"), null, 0);
+				List.of("design"), null, 0, epicBoard.getId());
+
+		// --- sub-tasks: the granular breakdown of two in-flight stories ----
+		subtask(p, "Audit column spacing tokens", lena, "In Review", boardRedesign);
+		subtask(p, "Rebuild the column header component", lena, "In Progress", boardRedesign);
+		subtask(p, "Migration guide for custom board layouts", amara, "Open", boardRedesign);
+		subtask(p, "Write the health-check probe", jonas, "In Progress", deployScript);
+		subtask(p, "Document the rollback procedure", jonas, "Open", deployScript);
 		// A few more on the admin's plate so the dashboard "Today's focus" fills.
 		issue(p, "Restore drag-handle focus ring after a drop", Issue.Type.BUG,
 				Issue.Priority.CRITICAL, "Open", admin, s24, 2, 60, 0, List.of(), -1, 0);
 		issue(p, "Sprint capacity overflow not flagged in header", Issue.Type.BUG,
 				Issue.Priority.MAJOR, "Open", admin, s24, 2, 75, 15,
 				List.of("performance"), -2, 0);
-		issue(p, "Wire ⌘K palette to project quick-switch", Issue.Type.FEATURE,
+		issue(p, "Wire ⌘K palette to project quick-switch", Issue.Type.STORY,
 				Issue.Priority.MAJOR, "In Progress", admin, s24, 3, 120, 45,
-				List.of(), 1, 3);
+				List.of(), 1, 3, epicSearch.getId());
 
 		// --- resolved this sprint / last 7d (feeds completion + ranking) ---
 		resolved(p, "Glass filter popup overflows on narrow windows", Issue.Type.BUG,
@@ -415,6 +431,25 @@ public class DemoSeeder {
 	private Issue issue(Project p, String title, Issue.Type type, Issue.Priority priority,
 			String state, User assignee, Sprint sprint, int points, int estimate, int spent,
 			List<String> tags, Integer dueOffsetDays, int rank) {
+		return issue(p, title, type, priority, state, assignee, sprint, points, estimate, spent,
+				tags, dueOffsetDays, rank, null);
+	}
+
+	/** Top-level epic that groups the standard issues seeded under it. */
+	private Issue epic(Project p, String title, User assignee, int rank) {
+		return issue(p, title, Issue.Type.EPIC, Issue.Priority.MAJOR, "In Progress", assignee,
+				null, 0, 0, 0, List.of(), null, rank, null);
+	}
+
+	/** Sub-task under a standard [parent] issue (same project, no estimate). */
+	private void subtask(Project p, String title, User assignee, String state, Issue parent) {
+		issue(p, title, Issue.Type.SUBTASK, Issue.Priority.NORMAL, state, assignee, null,
+				0, 0, 0, List.of(), null, 0, parent.getId());
+	}
+
+	private Issue issue(Project p, String title, Issue.Type type, Issue.Priority priority,
+			String state, User assignee, Sprint sprint, int points, int estimate, int spent,
+			List<String> tags, Integer dueOffsetDays, int rank, String parentId) {
 		long number = counters.merge(p.getKey(), 1L, Long::sum);
 		LocalDate due = dueOffsetDays == null ? null : LocalDate.now().plusDays(dueOffsetDays);
 		Issue i = Issue.builder()
@@ -427,6 +462,7 @@ public class DemoSeeder {
 				.state(state)
 				.assigneeId(assignee.getId())
 				.reporterId(p.getLeadId())
+				.parentId(parentId)
 				.sprintId(sprint == null ? null : sprint.getId())
 				.storyPoints(points)
 				.estimateMinutes(estimate)
@@ -598,6 +634,16 @@ public class DemoSeeder {
 			User admin, User tomas, User lena, User amara, User mei, User jonas) {
 		String u = "{{user:" + admin.getId() + "}}";
 
+		// --- spaces (persisted; carry their own icon/hue/description) ----------
+		space("Engineering", "code-xml", 250, 0, admin,
+				"Architecture, services, release & on-call runbooks.");
+		space("Product", "compass", 155, 1, admin,
+				"Specs, workflow rules and decision records.");
+		space("Design", "palette", 300, 2, admin,
+				"Brand, motion and the Hive design system.");
+		space("Operations", "server-cog", 200, 3, admin,
+				"Infra, deploy and observability.");
+
 		// --- Engineering — team-wide (CORE team) ---------------------------
 		Article engHome = teamArticle(core, "Engineering", "code-xml", "Engineering handbook", null,
 				admin, List.of("handbook"), 0,
@@ -647,6 +693,17 @@ public class DemoSeeder {
 				List.of("infra", "backup"), 0,
 				"## Backups & restore\n\nNightly `mongodump`, encrypted off-site. Test the restore "
 						+ "monthly.\n\nOn-call: {{user:" + mei.getId() + "}}.");
+	}
+
+	private Space space(String name, String icon, int hue, int sortOrder, User author, String desc) {
+		return spaceRepo.save(Space.builder()
+				.name(name)
+				.icon(icon)
+				.hue(hue)
+				.description(desc)
+				.sortOrder(sortOrder)
+				.authorId(author.getId())
+				.build());
 	}
 
 	private Article teamArticle(Team team, String space, String icon, String title, String parentId,

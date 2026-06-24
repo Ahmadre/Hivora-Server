@@ -18,6 +18,8 @@ import org.springframework.stereotype.Service;
 
 import java.time.Instant;
 import java.util.ArrayList;
+import java.util.Comparator;
+import java.util.LinkedList;
 import java.util.List;
 import java.util.Objects;
 import java.util.regex.Pattern;
@@ -69,6 +71,7 @@ public class IssueService {
 		if (author != null) {
 			issue.setReporterId(author.getId());
 		}
+		validateHierarchy(issue);
 		issue.setRank(Instant.now().toEpochMilli());
 		Issue saved = saveWithNumberRetry(issue, project);
 		mergeProjectLabels(project, saved.getTags());
@@ -121,6 +124,7 @@ public class IssueService {
 		String previousState = issue.getState();
 		String previousSprint = issue.getSprintId();
 		mutator.accept(issue);
+		validateHierarchy(issue);
 
 		Project project = projects.get(issue.getProjectId());
 		// Keep the issue's state in step with its sprint membership:
@@ -153,6 +157,52 @@ public class IssueService {
 					"State changed to \"" + saved.getState() + "\"");
 		}
 		return saved;
+	}
+
+	/**
+	 * Enforces the Epic → standard → sub-task hierarchy (see {@link Issue.Type}):
+	 * an epic never has a parent, a sub-task always does, a standard issue parents
+	 * to an epic, and a sub-task parents to a standard issue. The parent must live
+	 * in the same project, and a type change may not strand an existing child.
+	 */
+	private void validateHierarchy(Issue issue) {
+		Issue.Type type = issue.getType();
+		String parentId = issue.getParentId();
+		boolean hasParent = parentId != null && !parentId.isBlank();
+
+		if (type.isEpic() && hasParent) {
+			throw ApiException.badRequest("error.issue.epicNoParent");
+		}
+		if (type.isSubtask() && !hasParent) {
+			throw ApiException.badRequest("error.issue.subtaskNeedsParent");
+		}
+		if (hasParent) {
+			if (parentId.equals(issue.getId())) {
+				throw ApiException.badRequest("error.issue.parentSelf");
+			}
+			Issue parent = get(parentId);
+			if (!Objects.equals(parent.getProjectId(), issue.getProjectId())) {
+				throw ApiException.badRequest("error.issue.parentOtherProject");
+			}
+			boolean parentOk = type.isSubtask()
+					? parent.getType().isStandard()
+					: parent.getType().isEpic();
+			if (!parentOk) {
+				throw ApiException.badRequest("error.issue.parentWrongType", parent.getReadableId());
+			}
+		}
+		// A type change must keep every existing child link legal: sub-tasks need a
+		// standard parent, standard children need an epic parent.
+		if (issue.getId() != null) {
+			for (Issue child : issues.findByParentId(issue.getId())) {
+				boolean stillOk = child.getType().isSubtask()
+						? type.isStandard()
+						: type.isEpic();
+				if (!stillOk) {
+					throw ApiException.badRequest("error.issue.typeChangeHasChildren");
+				}
+			}
+		}
 	}
 
 	/** A workflow state counts as "backlog" by its conventional name. */
@@ -191,9 +241,44 @@ public class IssueService {
 	public void delete(String id, User user) {
 		Issue issue = get(id);
 		assertAccess(issue, user);
+		if (issue.getType().isEpic()) {
+			// Standard children survive as top-level issues — just drop the epic link.
+			mongo.updateMulti(new Query(Criteria.where("parentId").is(issue.getId())),
+					new Update().unset("parentId"), Issue.class);
+		}
+		else if (issue.getType().isStandard()) {
+			// Sub-tasks can't exist without their parent → cascade-delete them.
+			for (Issue child : issues.findByParentId(issue.getId())) {
+				comments.deleteByIssueId(child.getId());
+				activities.deleteByIssueId(child.getId());
+				issues.delete(child);
+			}
+		}
 		comments.deleteByIssueId(issue.getId());
 		activities.deleteByIssueId(issue.getId());
 		issues.delete(issue);
+	}
+
+	// ── hierarchy ───────────────────────────────────────────────────────────
+
+	/** Breadcrumb ancestors (root → immediate parent) plus direct children. */
+	public record Hierarchy(List<Issue> ancestors, List<Issue> children) {
+	}
+
+	public Hierarchy hierarchyOf(String idOrReadableId, User user) {
+		Issue issue = getForUser(idOrReadableId, user);
+		LinkedList<Issue> ancestors = new LinkedList<>();
+		String parentId = issue.getParentId();
+		int guard = 0; // cycle guard — the hierarchy is at most 3 levels deep
+		while (parentId != null && !parentId.isBlank() && guard++ < 5) {
+			Issue parent = issues.findById(parentId).orElse(null);
+			if (parent == null) break;
+			ancestors.addFirst(parent);
+			parentId = parent.getParentId();
+		}
+		List<Issue> children = new ArrayList<>(issues.findByParentId(issue.getId()));
+		children.sort(Comparator.comparingLong(Issue::getNumberInProject));
+		return new Hierarchy(ancestors, children);
 	}
 
 	/** Permanently deletes a label from a project: removes it from the project's
@@ -250,6 +335,7 @@ public class IssueService {
 				.priority(issue.getPriority())
 				.state(issue.getState())
 				.assigneeId(issue.getAssigneeId())
+				.parentId(issue.getParentId())
 				.sprintId(issue.getSprintId())
 				.startDate(issue.getStartDate())
 				.dueDate(issue.getDueDate())
@@ -279,6 +365,8 @@ public class IssueService {
 				before.getAssigneeId(), after.getAssigneeId());
 		add(log, after.getId(), actor, IssueActivity.Field.SPRINT,
 				before.getSprintId(), after.getSprintId());
+		add(log, after.getId(), actor, IssueActivity.Field.PARENT,
+				before.getParentId(), after.getParentId());
 		add(log, after.getId(), actor, IssueActivity.Field.START_DATE,
 				str(before.getStartDate()), str(after.getStartDate()));
 		add(log, after.getId(), actor, IssueActivity.Field.DUE_DATE,
