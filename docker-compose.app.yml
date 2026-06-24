@@ -1,0 +1,19 @@
+# Overlay that adds the Hinata web app on top of the base API stack
+# (docker-compose.yml). The API compose is the base; this file ships the
+# frontend as an add-on so the two can be deployed together:
+#
+#   docker compose -f docker-compose.yml -f docker-compose.app.yml up -d
+#
+# The reverse proxy (cloud.asta.hn) forwards track.asta.hn:443 → host:3456.
+name: hinata
+
+services:
+  hinata-app:
+    image: ghcr.io/hinata-platform/hinata-app:${HINATA_APP_TAG:-latest}
+    restart: unless-stopped
+    depends_on:
+      hinata-server:
+        condition: service_started
+    ports:
+      - "${HINATA_APP_PORT:-3456}:80"
+    networks: [hinata]

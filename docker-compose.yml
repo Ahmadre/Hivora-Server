@@ -73,8 +73,9 @@ services:
       retries: 5
 
   hinata-server:
-    build: .
-    image: ghcr.io/${GITHUB_REPOSITORY:-asta-hn/hinata-server}:latest
+    # Pulled from GHCR (built & pushed by CI). No build context is needed on the
+    # deployment host / Portainer. Pin a release by setting HINATA_SERVER_TAG.
+    image: ghcr.io/hinata-platform/hinata-server:${HINATA_SERVER_TAG:-latest}
     restart: unless-stopped
     depends_on:
       mongo1:
@@ -84,6 +85,8 @@ services:
     environment:
       SPRING_PROFILES_ACTIVE: prod
       HINATA_BASE_URL: ${HINATA_BASE_URL:?set in .env}
+      # Frontend (Flutter web) base URL — email deep links point here.
+      HINATA_WEB_BASE_URL: ${HINATA_WEB_BASE_URL:-}
       HINATA_JWT_SECRET: ${HINATA_JWT_SECRET:?set in .env}
       # X.509 client auth over TLS (no password in the URI). The app presents the
       # client certificate from HINATA_MONGO_TLS_KEYSTORE; register its subject DN
@@ -120,17 +123,10 @@ services:
       - ./deploy/x509/prod/hinata-app.p12:/etc/hinata/x509/hinata-app.p12:ro
       - ./deploy/x509/prod/truststore.p12:/etc/hinata/x509/truststore.p12:ro
     ports:
-      - "${HINATA_PORT:-8080}:8080"
+      # Published on the host port the reverse proxy (cloud.asta.hn) forwards
+      # api.track.asta.hn:443 → host:3356 to. Override with HINATA_PORT.
+      - "${HINATA_PORT:-3356}:8080"
     networks: [hinata]
-
-  # Local e-mail sink for development/staging. Replace HINATA_SMTP_* with a
-  # real SMTP relay in production and remove this service.
-  mailpit:
-    image: axllent/mailpit:latest
-    restart: unless-stopped
-    networks: [hinata]
-    ports:
-      - "8025:8025" # Web UI
 
 volumes:
   mongo1-data:
