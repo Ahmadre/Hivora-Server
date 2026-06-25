@@ -56,12 +56,7 @@ public class NotificationService {
 	public void notifyComment(Issue issue, User author, String text) {
 		Set<String> mentioned = parseUserMentions(text);
 		mentioned.remove(author.getId());
-		if (!mentioned.isEmpty()) {
-			deliver(mentioned, Notification.Type.MENTION,
-					author.getDisplayName() + " mentioned you in " + issue.getReadableId(),
-					author.getDisplayName() + " mentioned you on \"" + issue.getTitle() + "\"",
-					issueLink(issue));
-		}
+		notifyMentions(issue, author, mentioned);
 		Set<String> watchers = watchersWithout(issue, author);
 		watchers.removeAll(mentioned);
 		if (!watchers.isEmpty()) {
@@ -70,6 +65,33 @@ public class NotificationService {
 					author.getDisplayName() + " commented on \"" + issue.getTitle() + "\"",
 					issueLink(issue));
 		}
+	}
+
+	/**
+	 * Sends a direct {@code MENTION} notification to each given user (excluding the
+	 * actor, who never notifies themselves). Used for mentions in comments and in
+	 * the issue description.
+	 */
+	public void notifyMentions(Issue issue, User actor, Set<String> mentionedIds) {
+		if (actor == null) return; // system/seed authored — no human to attribute
+		Set<String> recipients = new HashSet<>(mentionedIds);
+		recipients.remove(actor.getId());
+		if (recipients.isEmpty()) return;
+		deliver(recipients, Notification.Type.MENTION,
+				actor.getDisplayName() + " mentioned you in " + issue.getReadableId(),
+				actor.getDisplayName() + " mentioned you on \"" + issue.getTitle() + "\"",
+				issueLink(issue));
+	}
+
+	/**
+	 * Notifies users who are mentioned in {@code after} but were not already
+	 * mentioned in {@code before} — so creating or editing a description pings only
+	 * the newly added mentions, never re-pinging existing ones on unrelated edits.
+	 */
+	public void notifyNewMentions(Issue issue, User actor, String before, String after) {
+		Set<String> added = parseUserMentions(after);
+		added.removeAll(parseUserMentions(before));
+		notifyMentions(issue, actor, added);
 	}
 
 	/** Extracts the distinct user ids referenced by {@code {{user:<id>}}} tokens. */

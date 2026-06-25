@@ -83,6 +83,8 @@ public class IssueService {
 		if (saved.getAssigneeId() != null && (author == null || !saved.getAssigneeId().equals(author.getId()))) {
 			notifications.notifyIssueAssigned(saved);
 		}
+		// Ping anyone @-mentioned in the freshly written description.
+		notifications.notifyNewMentions(saved, author, null, saved.getDescription());
 		return saved;
 	}
 
@@ -149,6 +151,9 @@ public class IssueService {
 		Issue saved = issues.save(issue);
 		mergeProjectLabels(project, saved.getTags());
 		recordChanges(before, saved, editor);
+		// Ping anyone newly @-mentioned in the description (existing mentions on an
+		// unrelated edit are not re-notified).
+		notifications.notifyNewMentions(saved, editor, before.getDescription(), saved.getDescription());
 		if (saved.getAssigneeId() != null && !saved.getAssigneeId().equals(previousAssignee)) {
 			notifications.notifyIssueAssigned(saved);
 		}
