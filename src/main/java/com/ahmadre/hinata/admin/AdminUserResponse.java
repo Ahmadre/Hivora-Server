@@ -14,6 +14,7 @@ public record AdminUserResponse(
 		String name,
 		String username,
 		String email,
+		String avatarUrl,
 		String title,
 		String role,
 		String origin,
