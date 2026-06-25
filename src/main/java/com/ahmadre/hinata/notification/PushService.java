@@ -2,6 +2,7 @@ package com.ahmadre.hinata.notification;
 
 import com.ahmadre.hinata.config.HinataProperties;
 import com.google.auth.oauth2.GoogleCredentials;
+import com.google.firebase.ErrorCode;
 import com.google.firebase.FirebaseApp;
 import com.google.firebase.FirebaseOptions;
 import com.google.firebase.messaging.AndroidConfig;
@@ -58,7 +59,8 @@ public class PushService {
 					? FirebaseApp.initializeApp(options)
 					: FirebaseApp.getInstance();
 			this.messaging = FirebaseMessaging.getInstance(app);
-			log.info("FCM push enabled (credentials: {}).", fcm.getCredentials());
+			log.info("FCM push enabled (project: {}, credentials: {}).",
+					app.getOptions().getProjectId(), fcm.getCredentials());
 		}
 		catch (Exception e) {
 			log.error("FCM init failed ({}). Push sends will no-op.", e.getMessage());
@@ -96,15 +98,39 @@ public class PushService {
 			messaging.send(message);
 		}
 		catch (FirebaseMessagingException e) {
-			MessagingErrorCode code = e.getMessagingErrorCode();
-			// Token no longer valid (app uninstalled, token rotated): drop it.
-			if (code == MessagingErrorCode.UNREGISTERED || code == MessagingErrorCode.INVALID_ARGUMENT) {
+			if (isDeadToken(e)) {
+				// Token no longer valid (app uninstalled, token rotated, wrong sender):
+				// drop it so the device collection self-heals and stops failing.
 				devices.deleteByToken(device.getToken());
-				log.debug("Pruned dead FCM token for user {}.", device.getUserId());
+				log.debug("Pruned dead FCM token for user {} ({}).", device.getUserId(), e.getMessagingErrorCode());
 			}
 			else {
-				log.warn("FCM send failed ({}): {}", code, e.getMessage());
+				log.warn("FCM send failed ({}): {}", e.getMessagingErrorCode(), e.getMessage());
 			}
 		}
+	}
+
+	/**
+	 * A send failure that means <em>this token will never deliver again</em> — so
+	 * the token should be pruned rather than retried/logged forever. FCM signals an
+	 * unregistered token with HTTP 404 ("Requested entity was not found"). The Admin
+	 * SDK usually maps that to {@link MessagingErrorCode#UNREGISTERED}, but when the
+	 * 404 error body can't be parsed (seen in the wild as "Not in GZIP format") the
+	 * messaging-specific code comes back {@code null}; the generic
+	 * {@link ErrorCode#NOT_FOUND} / the raw HTTP 404 still identify it, so we fall
+	 * back to those. INVALID_ARGUMENT (malformed token) and SENDER_ID_MISMATCH
+	 * (token belongs to another sender) are likewise unrecoverable for this token.
+	 */
+	private boolean isDeadToken(FirebaseMessagingException e) {
+		MessagingErrorCode code = e.getMessagingErrorCode();
+		if (code == MessagingErrorCode.UNREGISTERED
+				|| code == MessagingErrorCode.INVALID_ARGUMENT
+				|| code == MessagingErrorCode.SENDER_ID_MISMATCH) {
+			return true;
+		}
+		if (e.getErrorCode() == ErrorCode.NOT_FOUND || e.getErrorCode() == ErrorCode.INVALID_ARGUMENT) {
+			return true;
+		}
+		return e.getHttpResponse() != null && e.getHttpResponse().getStatusCode() == 404;
 	}
 }
