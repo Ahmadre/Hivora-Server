@@ -52,7 +52,7 @@ class DataExportPdfServiceTest {
 		when(me.projectsOf(user)).thenReturn(List.of());
 		when(sessions.list("u1")).thenReturn(List.of());
 		when(issues.findByReporterIdOrderByCreatedAtDesc("u1")).thenReturn(List.of());
-		when(issues.findByAssigneeIdOrderByCreatedAtDesc("u1")).thenReturn(List.of());
+		when(issues.findByAssigneeIdsContainsOrderByCreatedAtDesc("u1")).thenReturn(List.of());
 		when(comments.findByAuthorIdOrderByCreatedAtDesc("u1")).thenReturn(List.of());
 		when(auditLogs.findTop200ByActorIdOrderByTimestampDesc("u1")).thenReturn(List.of());
 	}
