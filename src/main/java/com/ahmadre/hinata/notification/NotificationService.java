@@ -58,16 +58,21 @@ public class NotificationService {
 	 * themselves.
 	 */
 	public void notifyComment(Issue issue, User author, String text) {
+		String preview = preview(text);
 		Set<String> mentioned = parseUserMentions(text);
 		mentioned.remove(author.getId());
-		notifyMentions(issue, author, mentioned);
+		notifyMentions(issue, author, mentioned, preview);
 		Set<String> watchers = watchersWithout(issue, author);
 		watchers.removeAll(mentioned);
 		if (!watchers.isEmpty()) {
+			// Lead with a teaser of the comment itself so the recipient can triage
+			// straight from the push/e-mail; fall back to the issue title when the
+			// comment has no readable text (e.g. attachment-only).
+			String body = preview.isBlank()
+					? author.getDisplayName() + " commented on \"" + issue.getTitle() + "\""
+					: author.getDisplayName() + " commented: \"" + preview + "\"";
 			deliver(watchers, Notification.Type.ISSUE_COMMENTED,
-					"New comment on " + issue.getReadableId(),
-					author.getDisplayName() + " commented on \"" + issue.getTitle() + "\"",
-					issueLink(issue));
+					"New comment on " + issue.getReadableId(), body, issueLink(issue));
 		}
 	}
 
@@ -77,14 +82,26 @@ public class NotificationService {
 	 * the issue description.
 	 */
 	public void notifyMentions(Issue issue, User actor, Set<String> mentionedIds) {
+		notifyMentions(issue, actor, mentionedIds, null);
+	}
+
+	/**
+	 * As {@link #notifyMentions(Issue, User, Set)}, but surfaces a short plain-text
+	 * {@code preview} of the surrounding text (the comment or description) in the
+	 * notification body so the recipient sees what they were mentioned about. A
+	 * blank preview falls back to the generic issue-title wording.
+	 */
+	public void notifyMentions(Issue issue, User actor, Set<String> mentionedIds, String preview) {
 		if (actor == null) return; // system/seed authored — no human to attribute
 		Set<String> recipients = new HashSet<>(mentionedIds);
 		recipients.remove(actor.getId());
 		if (recipients.isEmpty()) return;
+		String body = (preview == null || preview.isBlank())
+				? actor.getDisplayName() + " mentioned you on \"" + issue.getTitle() + "\""
+				: actor.getDisplayName() + ": \"" + preview + "\"";
 		deliver(recipients, Notification.Type.MENTION,
 				actor.getDisplayName() + " mentioned you in " + issue.getReadableId(),
-				actor.getDisplayName() + " mentioned you on \"" + issue.getTitle() + "\"",
-				issueLink(issue));
+				body, issueLink(issue));
 	}
 
 	/**
@@ -95,7 +112,52 @@ public class NotificationService {
 	public void notifyNewMentions(Issue issue, User actor, String before, String after) {
 		Set<String> added = parseUserMentions(after);
 		added.removeAll(parseUserMentions(before));
-		notifyMentions(issue, actor, added);
+		if (added.isEmpty()) return;
+		notifyMentions(issue, actor, added, preview(after));
+	}
+
+	/** Max characters of comment/description text surfaced in a notification preview. */
+	private static final int PREVIEW_MAX = 160;
+
+	/**
+	 * Renders raw editor text (mention tokens + markdown) into a short, single-line
+	 * plain-text teaser fit for a push body, e-mail and bell entry: mention tokens
+	 * become {@code @DisplayName}, markdown formatting is reduced to its visible
+	 * text, whitespace is collapsed and the result is truncated with an ellipsis.
+	 * Never returns {@code null}. The output is consumed only as plain text — the
+	 * e-mail layer HTML-escapes it and the push layer JSON-escapes it — so this is
+	 * about readability, not sanitisation.
+	 */
+	String preview(String text) {
+		if (text == null) return "";
+		// Resolve mention tokens to @DisplayName before stripping; the replacement
+		// is treated literally, so a name with '$' or '\\' can't corrupt the regex.
+		String s = USER_MENTION.matcher(text)
+				.replaceAll(m -> Matcher.quoteReplacement("@" + mentionName(m.group(1).trim())));
+		s = stripMarkdown(s).replaceAll("\\s+", " ").trim();
+		if (s.length() > PREVIEW_MAX) {
+			s = s.substring(0, PREVIEW_MAX - 1).trim() + "…";
+		}
+		return s;
+	}
+
+	/** Reduces common markdown syntax to its visible text for a plain-text teaser. */
+	private static String stripMarkdown(String s) {
+		s = s.replaceAll("(?s)```.*?```", " ");             // fenced code blocks
+		s = s.replaceAll("`([^`]*)`", "$1");                 // inline code
+		s = s.replaceAll("!\\[([^\\]]*)\\]\\([^)]*\\)", "$1"); // images -> alt text
+		s = s.replaceAll("\\[([^\\]]*)\\]\\([^)]*\\)", "$1");   // links -> link text
+		s = s.replaceAll("(?m)^\\s{0,3}>+\\s?", "");         // blockquote markers
+		s = s.replaceAll("(?m)^\\s{0,3}#{1,6}\\s+", "");     // ATX headings
+		s = s.replaceAll("(?m)^\\s{0,3}(?:[-*+]|\\d+\\.)\\s+", ""); // list markers
+		s = s.replaceAll("[*~]{1,3}", "");                   // bold/italic/strike
+		return s;
+	}
+
+	/** Display name for a mentioned user id, or a neutral fallback if unknown. */
+	private String mentionName(String userId) {
+		if (userId.isEmpty()) return "someone";
+		return users.findById(userId).map(User::getDisplayName).orElse("someone");
 	}
 
 	/** Extracts the distinct user ids referenced by {@code {{user:<id>}}} tokens. */
